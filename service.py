@@ -4,27 +4,41 @@
     uvicorn service:app --host 127.0.0.1 --port 8000
 
 接口：
-    GET  /health   存活与配置检查
-    POST /plan     {"request": "杭州 3天 2人 喜欢人文", "session_id": 可选}
+    GET  /health   存活与配置检查（不构造 agent，缺密钥也能返回可读结论）
+    POST /plan     {"request": "...", "session_id": 可选} -> TripPlan JSON + 统计
+
+安全：
+    默认只监听 127.0.0.1。若要对外提供，请在 .env 设置 SERVICE_TOKEN，
+    客户端必须带请求头 X-Service-Token，否则 401。
 """
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
+import os
+
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from travel.config import MissingEnvError, load_settings
 from travel.graph import build_agent, plan_trip
 
-app = FastAPI(title="AI Travel Agent", version="0.3.0")
+app = FastAPI(title="AI Travel Agent", version="0.4.0")
 _graph = None
+_settings = None
 
 
-def get_graph():
-    """延迟构建：导入 app 时不要求密钥齐全，便于 /health 单独检查。"""
-    global _graph
+def get_agent():
+    """延迟构建：导入 app 时不要求密钥齐全，/health 才能独立自检。"""
+    global _graph, _settings
     if _graph is None:
-        _graph, _ = build_agent()
-    return _graph
+        _graph, _settings = build_agent()
+    return _graph, _settings
+
+
+def require_token(x_service_token: str | None = Header(default=None)):
+    token = (os.getenv("SERVICE_TOKEN") or "").strip()
+    if token and x_service_token != token:
+        raise HTTPException(status_code=401, detail="缺少或错误的 X-Service-Token")
+    return True
 
 
 class PlanRequest(BaseModel):
@@ -49,14 +63,18 @@ def health():
     return {"status": "ok", "model": settings.travel_model, "project": settings.langsmith_project}
 
 
-@app.post("/plan", response_model=PlanResponse)
+@app.post("/plan", response_model=PlanResponse, dependencies=[Depends(require_token)])
 def plan(payload: PlanRequest):
     try:
-        report, stats, thread = plan_trip(get_graph(), payload.request, payload.session_id)
+        graph, settings = get_agent()
     except MissingEnvError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=str(exc).splitlines()[0]) from exc
+
+    try:
+        report, stats, thread = plan_trip(graph, settings, payload.request, payload.session_id)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {str(exc)[:200]}") from exc
+        # 不把内部异常原文透给调用方，只给类型与截断信息，完整堆栈留在服务端日志
+        raise HTTPException(status_code=500, detail=f"规划失败：{type(exc).__name__}") from exc
 
     if report is None:
         raise HTTPException(status_code=502, detail="模型未按 schema 返回，请检查 response_format 与工具输出")

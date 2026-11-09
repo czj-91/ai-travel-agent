@@ -16,6 +16,14 @@ from travel.eval import evaluate_report  # noqa: E402
 from travel.observability import RunStats, usage_from_messages  # noqa: E402
 from travel.schemas import DayPlan, Spot, TripPlan  # noqa: E402
 from travel.tools import format_search_results, search_with_retry  # noqa: E402
+from travel.config import load_settings  # noqa: E402
+
+# 需要联网/密钥的测试在没有配置时跳过，保证 CI 能跑离线子集
+_HAS_EMBED = bool(os.getenv("DASHSCOPE_API_KEY") and os.getenv("DASHSCOPE_BASE_URL"))
+
+class Skipped(Exception):
+    pass
+
 
 SAMPLE = {
     "query": "杭州 3天 人文 攻略",
@@ -227,6 +235,8 @@ def test_rag_tool_returns_text_or_no_match():
 
 def test_rag_embedding_rejects_off_topic():
     """语义召回必须拦住跑题查询，否则模型会误以为已查到、不再调用 web_search。"""
+    if not _HAS_EMBED:
+        raise Skipped("需要 DASHSCOPE 密钥")
     from travel.rag import PoiIndex, build_poi_tool
 
     tool_fn = build_poi_tool(PoiIndex(use_embeddings=True))
@@ -307,21 +317,63 @@ def test_plan_trip_rejects_image_on_text_model():
         db_path="x", search_timeout=1, search_retries=0,
     )
     try:
-        plan_trip(_Never(), "看图规划", image_path="whatever.png", settings=text_only)
+        plan_trip(_Never(), text_only, "看图规划", image_path="whatever.png")
     except ValueError as exc:
         assert "TRAVEL_MODEL" in str(exc)
     else:
         raise AssertionError("文本模型带图应直接拒绝")
 
+def test_parse_structured_from_text_fallback():
+    from types import SimpleNamespace
+
+    from travel.graph import parse_structured_from_text
+    from travel.schemas import TripPlan
+
+    payload = {
+        "destination": "杭州",
+        "days": 1,
+        "traveler_profile": "1 人",
+        "plan": [
+            {
+                "day": 1,
+                "theme": "西湖",
+                "base_area": "孤山",
+                "spots": [
+                    {"name": "浙江省博物馆", "why": "馆藏", "minutes": 120, "ticket_yuan": 0},
+                    {"name": "西泠印社", "why": "金石", "minutes": 60, "ticket_yuan": 0},
+                ],
+                "transport": "步行",
+                "day_cost_yuan": 0,
+            }
+        ],
+        "budget_total_yuan": 0,
+        "references": [],
+        "summary": "一天足够。",
+    }
+    import json as _json
+
+    noisy = SimpleNamespace(content="这是我给的方案：\n```json\n" + _json.dumps(payload, ensure_ascii=False) + "\n```\n希望有帮助")
+    parsed = parse_structured_from_text([noisy])
+    assert isinstance(parsed, TripPlan) and parsed.destination == "杭州"
+
+    assert parse_structured_from_text([SimpleNamespace(content="抱歉，我无法输出 JSON")]) is None
+    assert parse_structured_from_text([]) is None
+    # 脏数据不能被当成成功
+    broken = SimpleNamespace(content='{"destination": "杭州"}')
+    assert parse_structured_from_text([broken]) is None
+
 if __name__ == "__main__":
     tests = [(n, fn) for n, fn in sorted(globals().items()) if n.startswith("test_") and callable(fn)]
-    failed = 0
+    failed = skipped = 0
     for name, fn in tests:
         try:
             fn()
             print(f"  PASS  {name}")
+        except Skipped as skip:
+            skipped += 1
+            print(f"  SKIP  {name}: {skip}")
         except Exception as exc:
             failed += 1
             print(f"  FAIL  {name}: {type(exc).__name__}: {exc}")
-    print(f"\n{len(tests) - failed}/{len(tests)} 通过")
+    print(f"\n{len(tests) - failed - skipped}/{len(tests)} 通过，跳过 {skipped}，失败 {failed}")
     raise SystemExit(1 if failed else 0)

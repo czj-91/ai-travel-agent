@@ -3,7 +3,7 @@ revision = 5
 requires-python = ">=3.14"
 
 [[package]]
-name = "ai-open"
+name = "ai-travel-agent"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

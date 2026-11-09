@@ -1,0 +1,22 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: 离线单测（需要联网的用例会自动跳过）
+        run: uv run python tests/test_offline.py
+      - name: 服务层测试（TestClient，不依赖外部服务）
+        run: uv run python tests/test_service.py
+      - name: 评测用例与规则自检
+        run: uv run python evals/run_eval.py --dry-run

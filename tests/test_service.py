@@ -55,10 +55,17 @@ client = TestClient(service.app)
 
 
 def test_health_ok_with_fake_env():
-    service._graph = _FakeGraph()
-    os.environ.update({"DEEPSEEK_API_KEY": "sk-test", "TAVILY_API_KEY": "tvly-test"})
-    os.environ.pop("TRAVEL_MODEL", None)
-    body = client.get("/health").json()
+    saved = dict(os.environ)
+    try:
+        service._graph = _FakeGraph()
+        os.environ.update({"DEEPSEEK_API_KEY": "sk-test", "TAVILY_API_KEY": "tvly-test"})
+        os.environ.pop("TRAVEL_MODEL", None)
+        body = client.get("/health").json()
+        assert body["status"] == "ok", body
+        assert body["model"] == "deepseek-chat"
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
     assert body["status"] == "ok", body
     assert body["model"] == "deepseek-chat"
 
@@ -96,6 +103,18 @@ def test_plan_502_when_model_ignores_schema():
     assert resp.status_code == 502
     assert "schema" in resp.json()["detail"]
 
+def test_plan_requires_token_when_configured():
+    saved = os.environ.get("SERVICE_TOKEN")
+    os.environ["SERVICE_TOKEN"] = "secret-abc"
+    try:
+        service._graph = _FakeGraph()
+        assert client.post("/plan", json={"request": "杭州 1天"}).status_code == 401
+        ok = client.post("/plan", json={"request": "杭州 1天"}, headers={"X-Service-Token": "secret-abc"})
+        assert ok.status_code == 200, ok.text
+    finally:
+        os.environ.pop("SERVICE_TOKEN", None)
+        if saved:
+            os.environ["SERVICE_TOKEN"] = saved
 
 if __name__ == "__main__":
     tests = [(n, fn) for n, fn in sorted(globals().items()) if n.startswith("test_") and callable(fn)]

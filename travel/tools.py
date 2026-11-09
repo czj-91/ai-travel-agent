@@ -8,7 +8,8 @@ from langchain.tools import tool
 # Tavily 原始返回里 content 很长，还带 images/raw_content；整包塞进上下文会直接
 # 推高 token 并稀释模型注意力，所以只保留决策需要的「标题 | 链接 + 短摘要」。
 SNIPPET_LIMIT = 220
-DEFAULT_MAX_RESULTS = 5
+# 5 条降到 3 条：实测第 4、5 条摘要几乎不被模型引用，却照样进上下文计费
+DEFAULT_MAX_RESULTS = 3
 
 
 def format_search_results(raw, limit: int = DEFAULT_MAX_RESULTS) -> str:

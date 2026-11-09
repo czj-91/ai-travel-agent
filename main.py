@@ -9,7 +9,6 @@ from __future__ import annotations
 import sys
 
 from travel.graph import build_agent, plan_trip
-from travel.observability import RunStats
 
 
 def render(report) -> str:
@@ -60,11 +59,11 @@ def main(argv: list[str]) -> int:
         return 1
 
     graph, settings = build_agent()
-    print(f"模型={settings.travel_model} | 工具=Tavily web_search | LangSmith project={settings.langsmith_project}")
+    print(f"模型={settings.travel_model} | 工具=poi_lookup / weather_forecast / web_search | LangSmith project={settings.langsmith_project}")
     print(f"需求：{request}\n正在检索攻略并编排行程，请稍候…\n")
 
     try:
-        report, stats, thread = plan_trip(graph, request, session_id, image_path, settings=settings)
+        report, stats, thread = plan_trip(graph, settings, request, session_id, image_path)
     except ValueError as exc:
         print(f"输入有问题：{exc}")
         return 1
