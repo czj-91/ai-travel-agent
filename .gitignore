@@ -1,0 +1,25 @@
+# 密钥文件，绝对不能提交/分享
+.env
+
+# Python 虚拟环境与缓存
+.venv/
+__pycache__/
+
+# PyCharm 配置
+.idea/
+
+# notebook 检查点
+.ipynb_checkpoints/
+
+# 运行产物与会话数据库（含用户对话内容，不要提交）
+resources/
+*.db
+*.db-shm
+*.db-wal
+
+# 测试与打包缓存
+.pytest_cache/
+*.log
+build/
+dist/
+*.egg-info/
