@@ -16,8 +16,10 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from .config import Settings, load_settings
 from .observability import RunStats, Timer, usage_from_messages
+from .multimodal import build_content
 from .prompts import SYSTEM_PROMPT
 from .schemas import DayPlan, Spot, TripPlan
+from .rag import PoiIndex, build_poi_tool
 from .tools import build_search_tool
 
 # checkpointer 反序列化自定义类型必须显式白名单，否则新版 langgraph 会直接拒绝：
@@ -58,12 +60,7 @@ def build_agent(persist: bool = True, settings: Settings | None = None):
 
     graph = create_agent(
         model=model,
-        tools=[
-            build_search_tool(
-                retries=settings.search_retries,
-                timeout=settings.search_timeout,
-            )
-        ],
+        tools=[build_poi_tool(PoiIndex()), build_search_tool(retries=settings.search_retries, timeout=settings.search_timeout)],
         middleware=[
             SummarizationMiddleware(
                 model=model,
@@ -78,12 +75,23 @@ def build_agent(persist: bool = True, settings: Settings | None = None):
     return graph, settings
 
 
-def plan_trip(graph, request: str, session_id: str | None = None):
-    """跑一次规划，返回 (TripPlan, RunStats, thread_id)。同一 session_id 会延续记忆。"""
+def plan_trip(graph, request: str, session_id: str | None = None, image_path: str | None = None, settings: Settings | None = None):
+    """跑一次规划，返回 (TripPlan, RunStats, thread_id)。同一 session_id 会延续记忆。
+
+    带图片时必须用多模态模型（qwen-vl / qwen3.5-plus 这类），否则直接拒绝，
+    不要让请求打到模型后再报一个看不懂的 400。
+    """
+    settings = settings or globals()["settings"]
+    if image_path and not settings.travel_model.startswith("qwen"):
+        raise ValueError(
+            f"当前模型 {settings.travel_model} 不支持图片输入。"
+            "请在 .env 里把 TRAVEL_MODEL 改成 qwen3.5-plus 后重跑。"
+        )
+    content = build_content(request, image_path)
     thread = session_id or f"cli-{uuid.uuid4().hex[:8]}"
     config = {"configurable": {"thread_id": thread}}
     with Timer() as timer:
-        result = graph.invoke({"messages": [("user", request)]}, config)
+        result = graph.invoke({"messages": [("user", content)]}, config)
     stats = usage_from_messages(result)
     stats.elapsed_ms = timer.elapsed_ms
     return result.get("structured_response"), stats, thread

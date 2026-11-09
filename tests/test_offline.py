@@ -188,6 +188,131 @@ def test_require_env_and_model_gating():
         os.environ.update(saved)
 
 
+def test_rag_keyword_recall_offline():
+    from travel.rag import PoiIndex
+
+    idx = PoiIndex(use_embeddings=False)
+    assert idx.embed_backend == "keyword"
+    hits = idx.search("适合老人慢走 有电瓶车", top_k=3)
+    assert hits and hits[0]["row"]["name"] == "颐和园"
+    city_hits = idx.search("白色建筑 海景", city="大理", top_k=2)
+    assert all(h["row"]["city"] == "大理" for h in city_hits)
+    assert city_hits[0]["row"]["name"].startswith("理想邦")
+
+
+def test_rag_ttl_marks_stale_rows():
+    from travel.rag import days_since
+
+    assert days_since("2025-11-03", today="2026-11-09") == 371
+    assert days_since("2026-10-12", today="2026-11-09") == 28
+    assert days_since("坏日期", today="2026-11-09") > 9_000
+
+    from travel.rag import PoiIndex
+
+    idx = PoiIndex(use_embeddings=False, ttl_days=180)
+    stale = [h for h in idx.search("西泠印社", top_k=3) if h["stale"]]
+    assert stale, "2025-11 核实的条目应被标为过期"
+    text = idx.format_hits(stale)
+    assert "可能过期" in text and "web_search 复核" in text
+
+
+def test_rag_tool_returns_text_or_no_match():
+    from travel.rag import PoiIndex, build_poi_tool
+
+    tool_fn = build_poi_tool(PoiIndex(use_embeddings=False))
+    out = tool_fn.invoke({"query": "兵马俑 预约", "city": "西安"})
+    assert "120" in out and "预约" in out
+    empty = tool_fn.invoke({"query": "火星基地", "city": "杭州"})
+    assert "没有匹配结果" in empty
+
+def test_rag_embedding_rejects_off_topic():
+    """语义召回必须拦住跑题查询，否则模型会误以为已查到、不再调用 web_search。"""
+    from travel.rag import PoiIndex, build_poi_tool
+
+    tool_fn = build_poi_tool(PoiIndex(use_embeddings=True))
+    for q in ("上海迪士尼门票", "火星基地", "东京晴空塔"):
+        assert "没有匹配结果" in tool_fn.invoke({"query": q, "city": ""}), f"跑题查询未拦住: {q}"
+    assert "120" in tool_fn.invoke({"query": "兵马俑 预约", "city": "西安"})
+
+
+def test_rag_keyword_fallback_keeps_top1_relevant():
+    """降级路径只保证 top1 相关，不保证拦跑题（词面匹配的固有局限）。"""
+    from travel.rag import PoiIndex, build_poi_tool
+
+    tool_fn = build_poi_tool(PoiIndex(use_embeddings=False))
+    assert tool_fn.name == "poi_lookup"
+    assert "颐和园" in tool_fn.invoke({"query": "适合老人慢走 有电瓶车", "city": ""})
+    assert "120" in tool_fn.invoke({"query": "兵马俑 预约", "city": "西安"})
+    assert "没有匹配结果" in tool_fn.invoke({"query": "上海迪士尼门票", "city": ""})
+
+def test_multimodal_encode_and_errors(tmp_dir: str | None = None):
+    import base64
+    import tempfile
+    from pathlib import Path
+
+    from travel.multimodal import ImageInputError, build_content, encode_image
+
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="
+    )
+    with tempfile.TemporaryDirectory() as work:
+        good = Path(work) / "a.png"
+        good.write_bytes(png)
+        block = encode_image(good)
+        assert block["type"] == "image" and block["mime_type"] == "image/png"
+        assert base64.b64decode(block["base64"]) == png
+
+        content = build_content("这个景点值得去吗", good)
+        assert isinstance(content, list) and content[1] == {"type": "text", "text": "这个景点值得去吗"}
+        assert build_content("纯文本") == "纯文本"
+
+        empty = Path(work) / "e.png"
+        empty.write_bytes(b"")
+        try:
+            encode_image(empty)
+        except ImageInputError as exc:
+            assert "空文件" in str(exc)
+        else:
+            raise AssertionError("空文件应被拒绝")
+
+        try:
+            encode_image(Path(work) / "not-here.png")
+        except ImageInputError as exc:
+            assert "不存在" in str(exc)
+        else:
+            raise AssertionError("不存在的文件应被拒绝")
+
+        bad_ext = Path(work) / "a.txt"
+        bad_ext.write_text("hello")
+        try:
+            encode_image(bad_ext)
+        except ImageInputError as exc:
+            assert "不支持的图片格式" in str(exc)
+        else:
+            raise AssertionError("非图片格式应被拒绝")
+
+
+def test_plan_trip_rejects_image_on_text_model():
+    from travel.graph import plan_trip
+
+    class _Never:
+        def invoke(self, *a, **k):
+            raise AssertionError("不该被调用")
+
+    from travel.config import Settings
+
+    text_only = Settings(
+        travel_model="deepseek-chat", deepseek_api_key="sk-x", dashscope_api_key=None,
+        dashscope_base_url=None, tavily_api_key="tvly-x", langsmith_project="t",
+        db_path="x", search_timeout=1, search_retries=0,
+    )
+    try:
+        plan_trip(_Never(), "看图规划", image_path="whatever.png", settings=text_only)
+    except ValueError as exc:
+        assert "TRAVEL_MODEL" in str(exc)
+    else:
+        raise AssertionError("文本模型带图应直接拒绝")
+
 if __name__ == "__main__":
     tests = [(n, fn) for n, fn in sorted(globals().items()) if n.startswith("test_") and callable(fn)]
     failed = 0

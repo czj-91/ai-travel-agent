@@ -45,9 +45,14 @@ def render(report) -> str:
 
 
 def main(argv: list[str]) -> int:
-    session_id = None
-    if len(argv) >= 2 and argv[1] == "--session":
-        session_id, argv = argv[2], argv[3:]
+    session_id, image_path = None, None
+    while len(argv) >= 3 and argv[1].startswith("--"):
+        if argv[1] == "--session":
+            session_id, argv = argv[2], argv[3:]
+        elif argv[1] == "--image":
+            image_path, argv = argv[2], argv[3:]
+        else:
+            break
 
     request = " ".join(argv[1:]).strip() or input("这次想去哪、几天、几个人、有什么偏好？").strip()
     if not request:
@@ -58,7 +63,11 @@ def main(argv: list[str]) -> int:
     print(f"模型={settings.travel_model} | 工具=Tavily web_search | LangSmith project={settings.langsmith_project}")
     print(f"需求：{request}\n正在检索攻略并编排行程，请稍候…\n")
 
-    report, stats, thread = plan_trip(graph, request, session_id)
+    try:
+        report, stats, thread = plan_trip(graph, request, session_id, image_path, settings=settings)
+    except ValueError as exc:
+        print(f"输入有问题：{exc}")
+        return 1
     if report is None:
         print("模型没有按 schema 返回，本次结果不可结构化消费。")
         return 2
