@@ -23,3 +23,6 @@ resources/
 build/
 dist/
 *.egg-info/
+
+# langgraph dev 本地运行时数据
+.langgraph_api/
