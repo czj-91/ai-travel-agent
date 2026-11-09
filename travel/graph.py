@@ -54,11 +54,16 @@ def _build_checkpointer(settings: Settings, persist: bool):
     return checkpointer
 
 
-def build_agent(persist: bool = True, settings: Settings | None = None, prompt_version: str | None = None):
-    """返回 (graph, settings)。persist=True 时用 SQLite 保存会话状态。"""
+def build_agent(persist: bool = True, settings: Settings | None = None, prompt_version: str | None = None, platform_persistence: bool = False):
+    """返回 (graph, settings)。persist=True 时用 SQLite 保存会话状态。
+
+    platform_persistence=True 时**完全不传 checkpointer**：langgraph dev / LangSmith
+    平台自己管持久化，带着自定义 checkpointer 会直接 GraphLoadError 启动失败。
+    """
     settings = settings or load_settings()
     model = build_chat_model(settings)
 
+    kwargs = {} if platform_persistence else {"checkpointer": _build_checkpointer(settings, persist)}
     graph = create_agent(
         model=model,
         tools=[
@@ -73,7 +78,7 @@ def build_agent(persist: bool = True, settings: Settings | None = None, prompt_v
                 keep=("messages", 5),
             )
         ],
-        checkpointer=_build_checkpointer(settings, persist),
+        **kwargs,
         system_prompt=get_prompt(prompt_version),
         response_format=TripPlan,
     )
