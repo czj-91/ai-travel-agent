@@ -83,13 +83,14 @@ def test_health_ok_with_fake_env():
 
 
 def test_health_reports_missing_config():
-    saved = os.environ.pop("DEEPSEEK_API_KEY")
+    saved = os.environ.pop("DEEPSEEK_API_KEY", None)  # CI 上根本没有 .env，pop 必须给默认值
     try:
         body = client.get("/health").json()
         assert body["status"] == "config_missing"
         assert "DEEPSEEK_API_KEY" in body["detail"]
     finally:
-        os.environ["DEEPSEEK_API_KEY"] = saved
+        if saved is not None:
+            os.environ["DEEPSEEK_API_KEY"] = saved
 
 
 def test_plan_returns_structured_json():
