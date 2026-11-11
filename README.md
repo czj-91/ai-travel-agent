@@ -109,6 +109,7 @@ legacy/            v1 单文件版本，仅作演进记录
 | 端到端评测 | **6/6 = 100%**，累计 78,667 token / 162,263 ms（平均 27.0 s/条；含新加的「中间天空转」规则与天气工具改造） |
 | 端到端评测（点名需求校验后） | 只跑完第 1 条（杭州 PASS）就因 DeepSeek **余额耗尽 402** 中断；`must_include` 的全量校验**待充值后复跑** |
 | HTTP 实测（导出与网页） | `GET /` 200、`/health` 200、`POST /export` 200（md+ics）；ics 事件数/折行/转义正确；空白需求 422、坏 plan 422 |
+| CI（GitHub Actions, Linux） | **首次跑绿** @ `501ad14`：`offline-tests` job success |
 | 可靠性重复采样 | 同一组 3 条用例跑 3 轮：**9/9 通过** |
 | 多模态实测 | qwen3.5-plus 正确识别截图内容并判定「非旅游场景」，13.5 s / 2,364 token |
 | HTTP 实测 | `POST /plan` 200：16.5 s，本轮 6,952 + 1,331 token，6 条风险、3 条来源 |
@@ -143,7 +144,9 @@ v2 一开始**通过率反而掉了 33%**：工具变多后模型偶尔只回文
 - [x] 评测单条用例异常不中断整轮（402/网络故障按「本条失败」记账，退出码仍非 0）
 - [x] 多模态输入 `--image`
 - [x] 网页版 A 档改造：时间轴排版、深色模式、移动端、图片上传入口、本机历史会话、示例态 `?demo=1`、失败重试提示
-- [x] CI（离线测试子集）
+- [x] CI（离线测试子集）——**已在 commit 501ad14 首次跑绿**：35 项离线单测 + 14 项服务层测试 + 用例自检
+- [x] 网页前端（`web/`，零构建零 CDN）与行程导出（txt / Markdown / **ics**，按 RFC 5545 折行转义）
+- [ ] **容器化（现在是必需项，不是加分项）**：本机 Windows Smart App Control 已让项目不可用，而 Linux runner 全绿——Docker/WSL 是唯一的可复现出路
 - [ ] **P3** 交通工具/真实 POI 数据源定期抓取；失败看板接 LangSmith Dataset 做长期回归；日志脱敏与结构化；并发批量评测
 
 ## 7. 踩坑记录（真实排障过程）
@@ -178,11 +181,13 @@ v2 一开始**通过率反而掉了 33%**：工具变多后模型偶尔只回文
     图片被裁，看起来像横向溢出。用探针页量 `documentElement.scrollWidth == clientWidth` 才确认布局没问题。
     教训：**先用数据证伪，再改 CSS**——否则会把没病的地方越改越坏。
 
+15. **CI 第一次跑绿才暴露「只在我机器上能过」的测试**：`test_health_reports_missing_config` 里写的是 `os.environ.pop("DEEPSEEK_API_KEY")`（无默认值）。本机有 `.env`，变量必然存在，测试一直过；CI 环境没有 `.env`，`pop` 直接抛 `KeyError`，服务层测试整条红。修法是把 `pop` 的默认值补上并只在原值存在时回写。**教训：测试不能假设运行环境里有密钥**——这类缺陷本地永远发现不了，也正是 CI 的价值。（顺带说明：badge 挂上去但 CI 是红的，比不挂 badge 更扣分。）
+
 ## 8. 已知风险
 
 - `data/pois.jsonl` 是**演示语料**：字段格式、TTL、阈值标定方法通用，但门票与闭馆时间需换成定期抓取的权威源才能上线。
 - 评测样本只有 6 条，且判定规则是启发式的（例如预算容差 10%）；扩样与人工抽检仍是必需。
-- Windows **Smart App Control** 会拦截未签名扩展（本机实测拦过 `uuid_utils/_uuid_utils.pyd`，重试即通过）。
+- Windows **Smart App Control** 会拦截未签名原生扩展，而且**不是偶发**。本机实测：`_uuid_utils.pyd` 被持续拦截，由于 `langchain_core/utils/uuid.py` 是**硬 import**（被 langchain-core / langgraph-api / langsmith 依赖），结果是 `import langchain_core` 直接失败、本机一条测试都跑不起来；把 `uuid-utils` 从 0.19.0 升到 1.2.0 **仍然被拦**。之前写的「重试即通过」是错误结论，已更正。同一套代码在 GitHub Actions 的 Linux runner 上全绿，说明这是**平台策略问题而非代码问题**——也正因此，容器化/WSL 不是加分项而是必需项（见路线图）。
 - 同类拦截也会挡住 `.venv\Scripts\uvicorn.exe` 这类入口脚本：用 `python -m uvicorn` 起服务即可。
 - `gradio` 在 pyproject 里声明了但代码没有一处使用，且本机 Python 3.14 上 `import gradio` 直接失败（pandas C 扩展 `DLL load failed`）→ 属于悬空依赖，网页版改用 FastAPI + 一个静态页实现，零新增依赖。
 - DeepSeek 余额不足会在 `graph.invoke` 抛 `402 Insufficient Balance`：评测已改为「单条失败记一笔、整轮继续」，但跑分结论仍然要等充值后重跑才算数。
