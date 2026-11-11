@@ -818,6 +818,120 @@ def test_poi_tool_output_is_wrapped_as_untrusted():
     assert out.startswith('<external_data source="local-poi-kb">')
     assert out.rstrip().endswith("</external_data>")
     assert "120" in out
+def test_judge_aggregate_pure_logic():
+    from travel.judge import (
+        DimensionScore,
+        JudgeVerdict,
+        aggregate_verdicts,
+        average_score,
+    )
+
+    def verdict(a, b, c, blockers=()):
+        return JudgeVerdict(
+            dimensions=[
+                DimensionScore(name="需求覆盖", score=a, reason="x"),
+                DimensionScore(name="可执行性", score=b, reason="y"),
+                DimensionScore(name="节奏合理性", score=c, reason="z"),
+            ],
+            blocking_issues=list(blockers),
+            overall=a,
+        )
+
+    assert average_score(None) is None
+    assert average_score(verdict(4, 4, 4)) == 4.0
+
+    agg = aggregate_verdicts([verdict(5, 2, 4), verdict(3, 2, 4), None])
+    assert agg["scored"] == 2 and agg["failed"] == 1
+    assert agg["dimension_avg"]["可执行性"] == 2.0
+    assert agg["weakest_dimension"] == "可执行性"
+    # 3.67 与 3.0 的均值；浮点取整有边界，断言用区间而不是写死小数
+    assert 3.3 <= agg["overall_avg"] <= 3.4, agg["overall_avg"]
+
+    blocked = aggregate_verdicts([verdict(3, 3, 3, ["景点之间无法在一天内到达"])])
+    assert blocked["blocking_issues"] == {"景点之间无法在一天内到达": 1}
+
+
+def test_fact_check_vs_kb_flags_wrong_ticket():
+    from travel.judge import fact_check_vs_kb
+    from travel.rag import PoiIndex
+    from travel.schemas import DayPlan, Spot, TripPlan
+
+    index = PoiIndex(use_embeddings=False)
+    plan = TripPlan(
+        destination="西安",
+        days=1,
+        traveler_profile="1 人",
+        plan=[
+            DayPlan(
+                day=1,
+                theme="秦文化",
+                base_area="临潼",
+                spots=[
+                    Spot(name="秦始皇帝陵博物院（兵马俑）", why="军阵", minutes=180, ticket_yuan=150),
+                    Spot(name="西安城墙", why="骑行", minutes=120, ticket_yuan=54),
+                ],
+                transport="地铁+打车",
+                day_cost_yuan=204,
+            )
+        ],
+        budget_total_yuan=204,
+        references=["https://example.com/a"],
+        summary="一天紧凑。",
+    )
+    problems = fact_check_vs_kb(plan, index)
+    # 知识库写 120 元，行程写 150 元 → 必须报不一致；城墙 54 元一致 → 不该报
+    assert any("兵马俑" in text and "150" in text for text in problems)
+    assert not any("城墙" in text for text in problems)
+def test_fact_check_no_false_positive_on_different_objects():
+    """回归：核对器曾经把「外围免费视角」当成景区门票，5 条里 4 条误报。
+
+    误报样本全部来自真实评测输出，不是编的。
+    """
+    from travel.judge import _name_similarity, fact_check_vs_kb
+    from travel.rag import PoiIndex
+    from travel.schemas import DayPlan, Spot, TripPlan
+
+    assert _name_similarity("三塔倒影公园（外围机位）", "崇圣寺三塔文化旅游区") < 0.55
+    assert _name_similarity("锦里", "武侯祠与锦里") < 0.55
+    assert _name_similarity("鼓浪屿巷弄漫步", "鼓浪屿（含往返轮渡）") < 0.55
+    assert _name_similarity("秦始皇帝陵博物院（兵马俑）", "秦始皇帝陵博物院（兵马俑）") == 1.0
+
+    index = PoiIndex(use_embeddings=False)
+
+    def one_spot(name: str, price: float) -> "object":
+        return TripPlan(
+            destination="测试",
+            days=1,
+            traveler_profile="p",
+            plan=[
+                DayPlan(
+                    day=1,
+                    theme="t",
+                    base_area="b",
+                    spots=[
+                        Spot(name=name, why="w", minutes=120, ticket_yuan=price),
+                        Spot(name=name + "（补充点位）", why="w", minutes=60, ticket_yuan=price),
+                    ],
+                    transport="walk",
+                    day_cost_yuan=price,
+                )
+            ],
+            budget_total_yuan=price,
+            references=["https://example.com"],
+            summary="s",
+        )
+
+    for name, price in (
+        ("三塔倒影公园（外围机位）", 0),
+        ("锦里", 0),
+        ("鼓浪屿巷弄漫步", 0),
+        ("成都动物园（基地步行约10分钟）", 20),
+    ):
+        assert fact_check_vs_kb(one_spot(name, price), index) == [], f"{name} 仍被误报"
+
+    # 真错必须还能抓到：兵马俑知识库是 120 元
+    caught = fact_check_vs_kb(one_spot("秦始皇帝陵博物院（兵马俑）", 150), index)
+    assert any("150" in text and "120" in text for text in caught)
 if __name__ == "__main__":
     tests = [(n, fn) for n, fn in sorted(globals().items()) if n.startswith("test_") and callable(fn)]
     failed = skipped = 0

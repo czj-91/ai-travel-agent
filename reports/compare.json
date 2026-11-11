@@ -1,0 +1,231 @@
+{
+  "cases": 6,
+  "judge": true,
+  "arms": [
+    {
+      "arm": "裸模型（prompt 约束）",
+      "cases": 6,
+      "passed": 0,
+      "rule_violations": 7,
+      "fact_mismatches": 0,
+      "judge_avg": 3.4,
+      "tokens": 6783,
+      "avg_ms": 6001
+    },
+    {
+      "arm": "裸模型+结构化输出",
+      "cases": 6,
+      "passed": 0,
+      "rule_violations": 6,
+      "fact_mismatches": 0,
+      "judge_avg": 3.7,
+      "tokens": 16180,
+      "avg_ms": 11101
+    },
+    {
+      "arm": "本系统（RAG+天气）",
+      "cases": 6,
+      "passed": 6,
+      "rule_violations": 0,
+      "fact_mismatches": 0,
+      "judge_avg": 3.87,
+      "tokens": 100401,
+      "avg_ms": 27909
+    }
+  ],
+  "details": {
+    "bare": [
+      {
+        "request": "杭州 3天 2人 喜欢人文历史 不吃辣 人均预算1500 不含住宿",
+        "passed": false,
+        "problems": [
+          "要求给出参考来源，但 references 为空",
+          "人均预算 3000 元超过上限 1500 元（容差 10%）"
+        ],
+        "fact_mismatches": [],
+        "judge_avg": 3.4,
+        "tokens": 962,
+        "elapsed_ms": 5966
+      },
+      {
+        "request": "成都 4天 亲子 带5岁小孩 节奏要慢 需要室内备选（下雨） 人均预算1200",
+        "passed": false,
+        "problems": [
+          "JSON 可解析但字段不合 schema：4 validation errors for TripPlan plan.0.meals   Input should be a valid list [type=list_type, input_value='午餐：太古里周边...路龙抄手等小吃', input_type=str]     For further "
+        ],
+        "fact_mismatches": [],
+        "judge_avg": null,
+        "tokens": 1162,
+        "elapsed_ms": 6212
+      },
+      {
+        "request": "西安 2天 第一次去 想看兵马俑和城墙 尽量地铁出行 人均预算800",
+        "passed": false,
+        "problems": [
+          "JSON 可解析但字段不合 schema：2 validation errors for TripPlan plan.0.meals   Input should be a valid list [type=list_type, input_value='午餐在兵马俑景区...馍、凉皮等小吃', input_type=str]     For further "
+        ],
+        "fact_mismatches": [],
+        "judge_avg": null,
+        "tokens": 822,
+        "elapsed_ms": 4445
+      },
+      {
+        "request": "厦门 3天 海边+美食 预算偏紧 人均800 不住海景房",
+        "passed": false,
+        "problems": [
+          "JSON 可解析但字段不合 schema：3 validation errors for TripPlan plan.0.meals   Input should be a valid list [type=list_type, input_value='午餐：曾厝垵小吃...档（人均约50元）', input_type=str]     For furthe"
+        ],
+        "fact_mismatches": [],
+        "judge_avg": null,
+        "tokens": 1202,
+        "elapsed_ms": 5898
+      },
+      {
+        "request": "北京 5天 老人同行 少爬山 需要无障碍与休息点 人均预算1500",
+        "passed": false,
+        "problems": [
+          "JSON 可解析但字段不合 schema：6 validation errors for TripPlan plan.0.meals   Input should be a valid list [type=list_type, input_value='午餐可在故宫内冰...烂易消化菜品。', input_type=str]     For further "
+        ],
+        "fact_mismatches": [],
+        "judge_avg": null,
+        "tokens": 1495,
+        "elapsed_ms": 8284
+      },
+      {
+        "request": "大理 4天 自驾 想环洱海 摄影优先 日出日落点位 人均预算1000",
+        "passed": false,
+        "problems": [
+          "JSON 可解析但字段不合 schema：4 validation errors for TripPlan plan.0.meals   Input should be a valid list [type=list_type, input_value='午餐古城小吃，晚餐才村附近白族菜', input_type=str]     For further in"
+        ],
+        "fact_mismatches": [],
+        "judge_avg": null,
+        "tokens": 1140,
+        "elapsed_ms": 5202
+      }
+    ],
+    "bare_structured": [
+      {
+        "request": "杭州 3天 2人 喜欢人文历史 不吃辣 人均预算1500 不含住宿",
+        "passed": false,
+        "problems": [
+          "要求给出参考来源，但 references 为空"
+        ],
+        "fact_mismatches": [],
+        "judge_avg": 3.8,
+        "tokens": 2736,
+        "elapsed_ms": 11939
+      },
+      {
+        "request": "成都 4天 亲子 带5岁小孩 节奏要慢 需要室内备选（下雨） 人均预算1200",
+        "passed": false,
+        "problems": [
+          "要求给出参考来源，但 references 为空"
+        ],
+        "fact_mismatches": [],
+        "judge_avg": 4.0,
+        "tokens": 2517,
+        "elapsed_ms": 9186
+      },
+      {
+        "request": "西安 2天 第一次去 想看兵马俑和城墙 尽量地铁出行 人均预算800",
+        "passed": false,
+        "problems": [
+          "结构化输出解析失败：无错误详情"
+        ],
+        "fact_mismatches": [],
+        "judge_avg": null,
+        "tokens": 2343,
+        "elapsed_ms": 8415
+      },
+      {
+        "request": "厦门 3天 海边+美食 预算偏紧 人均800 不住海景房",
+        "passed": false,
+        "problems": [
+          "要求给出参考来源，但 references 为空"
+        ],
+        "fact_mismatches": [],
+        "judge_avg": 3.8,
+        "tokens": 2790,
+        "elapsed_ms": 11840
+      },
+      {
+        "request": "北京 5天 老人同行 少爬山 需要无障碍与休息点 人均预算1500",
+        "passed": false,
+        "problems": [
+          "结构化输出解析失败：无错误详情"
+        ],
+        "fact_mismatches": [],
+        "judge_avg": null,
+        "tokens": 2961,
+        "elapsed_ms": 12910
+      },
+      {
+        "request": "大理 4天 自驾 想环洱海 摄影优先 日出日落点位 人均预算1000",
+        "passed": false,
+        "problems": [
+          "要求给出参考来源，但 references 为空"
+        ],
+        "fact_mismatches": [],
+        "judge_avg": 3.2,
+        "tokens": 2833,
+        "elapsed_ms": 12318
+      }
+    ],
+    "agent": [
+      {
+        "request": "杭州 3天 2人 喜欢人文历史 不吃辣 人均预算1500 不含住宿",
+        "passed": true,
+        "tokens": 15283,
+        "elapsed_ms": 36679,
+        "problems": [],
+        "fact_mismatches": [],
+        "judge_avg": 3.4
+      },
+      {
+        "request": "成都 4天 亲子 带5岁小孩 节奏要慢 需要室内备选（下雨） 人均预算1200",
+        "passed": true,
+        "tokens": 9846,
+        "elapsed_ms": 22968,
+        "problems": [],
+        "fact_mismatches": [],
+        "judge_avg": 4.0
+      },
+      {
+        "request": "西安 2天 第一次去 想看兵马俑和城墙 尽量地铁出行 人均预算800",
+        "passed": true,
+        "tokens": 14816,
+        "elapsed_ms": 22185,
+        "problems": [],
+        "fact_mismatches": [],
+        "judge_avg": 4.0
+      },
+      {
+        "request": "厦门 3天 海边+美食 预算偏紧 人均800 不住海景房",
+        "passed": true,
+        "tokens": 25203,
+        "elapsed_ms": 29287,
+        "problems": [],
+        "fact_mismatches": [],
+        "judge_avg": 4.2
+      },
+      {
+        "request": "北京 5天 老人同行 少爬山 需要无障碍与休息点 人均预算1500",
+        "passed": true,
+        "tokens": 16321,
+        "elapsed_ms": 27948,
+        "problems": [],
+        "fact_mismatches": [],
+        "judge_avg": 4.0
+      },
+      {
+        "request": "大理 4天 自驾 想环洱海 摄影优先 日出日落点位 人均预算1000",
+        "passed": true,
+        "tokens": 18932,
+        "elapsed_ms": 28389,
+        "problems": [],
+        "fact_mismatches": [],
+        "judge_avg": 3.6
+      }
+    ]
+  }
+}
