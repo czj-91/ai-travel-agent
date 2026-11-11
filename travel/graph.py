@@ -5,6 +5,7 @@ langgraph dev / Studio 挂载的就是本模块里的 agent 对象。
 from __future__ import annotations
 
 import sqlite3
+import threading
 import uuid
 
 from langchain.agents import create_agent
@@ -16,7 +17,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from .config import Settings, load_settings
 from .observability import RunStats, Timer, usage_from_messages
-from .multimodal import build_content
+from .multimodal import build_content, check_image_model
 from .prompts import get_prompt
 from .schemas import DayPlan, Spot, TripPlan
 from .rag import PoiIndex, build_poi_tool
@@ -44,14 +45,24 @@ def build_chat_model(settings: Settings):
     return init_chat_model(settings.travel_model)
 
 
+# build_agent() 会被评测、A/B、测试反复调用；每次都新建 sqlite 连接却没人关，
+# 文件句柄只会越堆越多。按 db_path 复用同一个 saver（SqliteSaver 内部自带写锁）。
+_CHECKPOINTERS: dict[str, SqliteSaver] = {}
+_CHECKPOINTER_LOCK = threading.Lock()
+
+
 def _build_checkpointer(settings: Settings, persist: bool):
     if not persist:
         return InMemorySaver()
-    connection = sqlite3.connect(settings.db_path, check_same_thread=False)
-    serde = JsonPlusSerializer(allowed_msgpack_modules=ALLOWED_MODULES)
-    checkpointer = SqliteSaver(connection, serde=serde)
-    checkpointer.setup()
-    return checkpointer
+    with _CHECKPOINTER_LOCK:
+        saved = _CHECKPOINTERS.get(settings.db_path)
+        if saved is None:
+            connection = sqlite3.connect(settings.db_path, check_same_thread=False)
+            serde = JsonPlusSerializer(allowed_msgpack_modules=ALLOWED_MODULES)
+            saved = SqliteSaver(connection, serde=serde)
+            saved.setup()
+            _CHECKPOINTERS[settings.db_path] = saved
+        return saved
 
 
 def build_agent(persist: bool = True, settings: Settings | None = None, prompt_version: str | None = None, platform_persistence: bool = False):
@@ -147,7 +158,8 @@ def parse_structured_from_text(messages) -> TripPlan | None:
     return None
 
 
-def plan_trip(graph, settings: Settings, request: str, session_id: str | None = None, image_path: str | None = None):
+def plan_trip(graph, settings: Settings, request: str, session_id: str | None = None,
+              image_path: str | None = None, image_block: dict | None = None):
     """跑一次规划，返回 (TripPlan, RunStats, thread_id)。同一 session_id 会延续记忆。
 
     带图片时必须用多模态模型（qwen-vl / qwen3.5-plus 这类），否则直接拒绝，
@@ -156,13 +168,9 @@ def plan_trip(graph, settings: Settings, request: str, session_id: str | None = 
     结构化工具没被调用时走两级兜底：先从文本里解析 JSON，再在同一 thread 上
     显式提醒一次。A/B 实测：工具越多、提示词越长，模型越容易只回文本不调工具。
     """
-    if image_path and not settings.travel_model.startswith("qwen"):
-        raise ValueError(
-            f"当前模型 {settings.travel_model} 不支持图片输入。"
-            "请在 .env 里把 TRAVEL_MODEL 改成 qwen3.5-plus 后重跑。"
-        )
+    check_image_model(settings.travel_model, bool(image_path or image_block))
 
-    content = build_content(request, image_path)
+    content = build_content(request, image_path, image_block)
     thread = session_id or f"cli-{uuid.uuid4().hex[:8]}"
     config = {"configurable": {"thread_id": thread}}
 

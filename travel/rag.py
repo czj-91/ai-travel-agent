@@ -95,6 +95,7 @@ class PoiIndex:
         ]
         self.ttl_days = ttl_days
         self.vectors: dict[str, list[float]] = {}
+        self._query_cache: dict[str, list[float]] = {}
         self.embed_backend = "keyword"
         want = use_embeddings if use_embeddings is not None else bool(os.getenv("DASHSCOPE_API_KEY"))
         if want:
@@ -113,6 +114,9 @@ class PoiIndex:
         cache: dict[str, list[float]] = {}
         if CACHE_PATH.exists():
             cache = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+        live = {self._key(record_text(row)) for row in self.rows}
+        # 语料增删后旧向量只会让缓存文件越长越大，写回前先丢掉不再引用的条目
+        cache = {key: value for key, value in cache.items() if key in live}
         missing = [r for r in self.rows if self._key(record_text(r)) not in cache]
         if missing:
             vectors = self._embed([record_text(r) for r in missing])
@@ -139,10 +143,16 @@ class PoiIndex:
     def _query_vector(self, query: str) -> list[float] | None:
         if self.embed_backend != "embedding":
             return None
+        cached = self._query_cache.get(query)
+        if cached is not None:
+            return cached
         try:
-            return self._embed([query])[0]
+            vector = self._embed([query])[0]
         except Exception:
             return None
+        # 一轮规划里模型常用几乎相同的检索词问两次，命中缓存就少打一次 embedding 接口
+        self._query_cache[query] = vector
+        return vector
 
     def search(self, query: str, city: str = "", top_k: int = 3, min_score: float | None = None) -> list[dict]:
         """召回 POI。低于阈值的条目必须丢弃：把无关条目喂给模型，
@@ -156,8 +166,6 @@ class PoiIndex:
                 continue
             if qv is not None:
                 score = cosine(qv, self.vectors[self._key(record_text(row))])
-                if city and row["city"] == city:
-                    score += 0.2
             else:
                 score = keyword_score(query, row)
             if score < floor:
@@ -173,13 +181,16 @@ class PoiIndex:
         for h in hits:
             r = h["row"]
             closed = f"；周{r['closed_weekday'][-1]}闭馆" if r.get("closed_weekday") else ""
-            booking = _clip(r["booking"], 46)
-            highlights = _clip(r["highlights"], 34)
+            booking = _clip(r.get("booking", ""), 46)
+            highlights = _clip(r.get("highlights", ""), 34)
+            ticket = r.get("ticket_yuan")
+            ticket_text = f"{ticket:.0f}元" if isinstance(ticket, (int, float)) else "门票待核实"
             lines.append(
-                f"- {r['name']}｜{r['ticket_yuan']:.0f}元｜{r['open_hours']}{closed}｜{booking}｜{highlights}｜{r['source']}"
+                f"- {r.get('name', '未知景点')}｜{ticket_text}｜{r.get('open_hours', '开放时间待核实')}{closed}"
+                f"｜{booking}｜{highlights}｜{r.get('source', '')}"
             )
             if h["stale"]:
-                lines.append(f"  ⚠ 核实于 {r['verified_at']}（{h['age_days']} 天前），可能过期，需 web_search 复核")
+                lines.append(f"  ⚠ 核实于 {r.get('verified_at', '未知')}（{h['age_days']} 天前），可能过期，需 web_search 复核")
         return "\n".join(lines) if lines else "本地 POI 库没有匹配结果。"
 
 

@@ -4,6 +4,8 @@ version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
     "dashscope>=2.0.3",
+    "fastapi>=0.162.0",
+    "gradio>=6.31.0",
     "ipykernel>=7.4.0",
     "ipywidgets>=8.1.9",
     "langchain>=1.4.8",
@@ -18,6 +20,7 @@ dependencies = [
     "openai>=3.42.1",
     "pydantic>=2.14.2",
     "python-dotenv>=1.2.4",
+    "uvicorn>=0.54.0",
 ]
 
 [[tool.uv.index]]

@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 MAX_DAY_MINUTES = 600
+# 中间天的游玩时长下限：首末天通常是到达/返程，排不满是正常的
+MIN_DAY_MINUTES = 120
 
 
 def evaluate_report(report, expect: dict | None = None) -> list[str]:
@@ -19,12 +21,14 @@ def evaluate_report(report, expect: dict | None = None) -> list[str]:
     if day_numbers != list(range(1, len(report.plan) + 1)):
         problems.append(f"天序号不连续或乱序：{day_numbers}")
 
-    for day in report.plan:
+    for index, day in enumerate(report.plan):
         if len(day.spots) < 2:
             problems.append(f"第 {day.day} 天只有 {len(day.spots)} 个游玩点，少于 2 个")
         total = sum(s.minutes for s in day.spots)
         if total > MAX_DAY_MINUTES:
             problems.append(f"第 {day.day} 天游玩时长 {total} 分钟，超过 {MAX_DAY_MINUTES} 分钟上限")
+        if 0 < index < len(report.plan) - 1 and total < MIN_DAY_MINUTES:
+            problems.append(f"第 {day.day} 天游玩时长只有 {total} 分钟，中间天空转（下限 {MIN_DAY_MINUTES} 分钟）")
         if not day.base_area.strip():
             problems.append(f"第 {day.day} 天没有填 base_area，无法判断通勤是否合理")
 
@@ -55,6 +59,17 @@ def evaluate_report(report, expect: dict | None = None) -> list[str]:
 
     if expect.get("destination") and expect["destination"] not in report.destination:
         problems.append(f"目的地不是期望的 {expect['destination']}，实际是 {report.destination}")
+
+    # 用户点名要的东西必须真的出现在行程里：否则「通过率 100%」只证明格式对，不证明需求被满足
+    haystack = " ".join(
+        [report.summary, report.traveler_profile, report.best_season_note]
+        + [f"{day.theme} {day.base_area} {' '.join(day.meals)}" for day in report.plan]
+        + [f"{spot.name} {spot.why}" for spot in report.flattened_spots()]
+    ).lower()
+    for keyword in expect.get("must_include") or []:
+        text = str(keyword).lower().strip()
+        if text and text not in haystack:
+            problems.append(f"用户点名要的「{keyword}」没有出现在行程里")
 
     if not report.summary.strip():
         problems.append("summary 为空")

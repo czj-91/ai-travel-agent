@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -54,6 +55,17 @@ class _FakeGraph:
 client = TestClient(service.app)
 
 
+# graph 与 settings 必须成对替换：plan_trip 会读 settings.travel_model 判断能不能收图
+def _use_fake_agent(structured=_sample_plan(), model="deepseek-chat"):
+    service._graph = _FakeGraph(structured)
+    service._settings = SimpleNamespace(travel_model=model)
+
+
+PNG_DATA_URL = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="
+)
+
+
 def test_health_ok_with_fake_env():
     saved = dict(os.environ)
     try:
@@ -81,7 +93,7 @@ def test_health_reports_missing_config():
 
 
 def test_plan_returns_structured_json():
-    service._graph = _FakeGraph()
+    _use_fake_agent()
     resp = client.post("/plan", json={"request": "杭州 1天 人文", "session_id": "t-1"})
     assert resp.status_code == 200, resp.text
     data = resp.json()
@@ -93,12 +105,12 @@ def test_plan_returns_structured_json():
 
 
 def test_plan_rejects_too_short_request():
-    service._graph = _FakeGraph()
+    _use_fake_agent()
     assert client.post("/plan", json={"request": "x"}).status_code == 422
 
 
 def test_plan_502_when_model_ignores_schema():
-    service._graph = _FakeGraph(structured=None)
+    _use_fake_agent(structured=None)
     resp = client.post("/plan", json={"request": "杭州 1天"})
     assert resp.status_code == 502
     assert "schema" in resp.json()["detail"]
@@ -107,7 +119,7 @@ def test_plan_requires_token_when_configured():
     saved = os.environ.get("SERVICE_TOKEN")
     os.environ["SERVICE_TOKEN"] = "secret-abc"
     try:
-        service._graph = _FakeGraph()
+        _use_fake_agent()
         assert client.post("/plan", json={"request": "杭州 1天"}).status_code == 401
         ok = client.post("/plan", json={"request": "杭州 1天"}, headers={"X-Service-Token": "secret-abc"})
         assert ok.status_code == 200, ok.text
@@ -115,6 +127,96 @@ def test_plan_requires_token_when_configured():
         os.environ.pop("SERVICE_TOKEN", None)
         if saved:
             os.environ["SERVICE_TOKEN"] = saved
+
+
+def test_export_builds_files_without_calling_the_model():
+    resp = client.post("/export", json={"plan": _sample_plan().model_dump(), "start_date": "2026-12-01"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["start_date"] == "2026-12-01" and body["start_date_guessed"] is False
+    assert {item["format"] for item in body["files"]} == {"markdown", "ics"}
+    markdown = next(item["content"] for item in body["files"] if item["format"] == "markdown")
+    assert "# 杭州 1 天行程（2026-12-01 起）" in markdown and "| 09:00–11:00 |" in markdown
+
+
+def test_export_flags_a_guessed_start_date():
+    resp = client.post("/export", json={"plan": _sample_plan().model_dump(), "formats": ["ics"]})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["start_date_guessed"] is True
+    assert body["files"][0]["name"].startswith("行程-杭州-")
+
+
+def test_export_rejects_bad_payloads():
+    assert client.post("/export", json={"plan": {"foo": 1}}).status_code == 422
+    assert client.post("/export", json={"plan": _sample_plan().model_dump(), "formats": ["pdf"]}).status_code == 422
+    assert client.post("/export", json={"plan": _sample_plan().model_dump(), "formats": []}).status_code == 422
+    assert client.post("/export", json={"plan": _sample_plan().model_dump(), "start_date": "下周"}).status_code == 422
+
+
+def test_index_page_is_served():
+    resp = client.get("/")
+    assert resp.status_code == 200, resp.text
+    assert "旅行规划" in resp.text and 'id="request"' in resp.text
+    # 网页版必须零 CDN：样式与脚本都得从本地 /static 拿
+    assert "/static/app.css" in resp.text and "/static/app.js" in resp.text
+    import re
+
+    assert not re.search(r'<(?:script|link)[^>]+(?:src|href)="https?://', resp.text), "引入了外部 CDN，断网就打不开"
+    for asset in ("/static/app.css", "/static/app.js"):
+        got = client.get(asset)
+        assert got.status_code == 200 and len(got.text) > 400, asset
+    assert client.get("/static/none.css").status_code == 404
+
+
+def test_plan_rejects_blank_request_but_strips_the_useful_one():
+    captured = {}
+
+    class _Recorder(_FakeGraph):
+        def invoke(self, payload, config):
+            captured["text"] = payload["messages"][0][1]
+            return super().invoke(payload, config)
+
+    _use_fake_agent()
+    service._graph = _Recorder()
+    assert client.post("/plan", json={"request": "   "}).status_code == 422, "两个空格曾能绕过 min_length 直接进模型"
+    resp = client.post("/plan", json={"request": "  杭州 1天  "})
+    assert resp.status_code == 200, resp.text
+    assert captured["text"] == "杭州 1天", "首尾空白不该原样送进模型"
+
+
+def test_plan_passes_uploaded_image_as_content_block():
+    captured = {}
+
+    class _Recorder(_FakeGraph):
+        def invoke(self, payload, config):
+            captured["content"] = payload["messages"][0][1]
+            return super().invoke(payload, config)
+
+    _use_fake_agent(model="qwen3.5-plus")
+    service._graph = _Recorder()
+    resp = client.post("/plan", json={"request": "这个景点值得去吗", "image": PNG_DATA_URL})
+    assert resp.status_code == 200, resp.text
+    content = captured["content"]
+    assert isinstance(content, list) and len(content) == 2, "图文要组成 content block 列表"
+    assert content[0]["type"] == "image" and content[0]["mime_type"] == "image/png"
+    assert content[1] == {"type": "text", "text": "这个景点值得去吗"}
+
+
+def test_plan_rejects_image_on_text_model_with_readable_error():
+    _use_fake_agent(model="deepseek-chat")
+    resp = client.post("/plan", json={"request": "这个景点值得去吗", "image": PNG_DATA_URL})
+    assert resp.status_code == 400, resp.text
+    detail = resp.json()["detail"]
+    assert "不支持图片输入" in detail and "qwen" in detail, detail
+
+
+def test_plan_rejects_unusable_image_payloads():
+    _use_fake_agent(model="qwen3.5-plus")
+    assert client.post("/plan", json={"request": "看图", "image": "data:image/png;base64,@@not base64@@"}).status_code == 422
+    too_small = client.post("/plan", json={"request": "看图", "image": "data:text/plain;base64,aGVsbG8="})
+    assert too_small.status_code == 422 and "不支持的图片格式" in too_small.json()["detail"], too_small.text
+
 
 if __name__ == "__main__":
     tests = [(n, fn) for n, fn in sorted(globals().items()) if n.startswith("test_") and callable(fn)]

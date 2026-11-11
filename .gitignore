@@ -17,6 +17,9 @@ resources/
 *.db-shm
 *.db-wal
 
+# 导出的行程文件（markdown / ics），本机自取
+outputs/
+
 # 测试与打包缓存
 .pytest_cache/
 *.log

@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from travel.eval import evaluate_report  # noqa: E402
 from travel.graph import build_agent, plan_trip  # noqa: E402
+from travel.observability import RunStats  # noqa: E402
 
 CASES = os.path.join(os.path.dirname(__file__), "cases.jsonl")
 
@@ -27,6 +28,31 @@ def load_cases(limit: int | None = None) -> list[dict]:
     return cases[:limit] if limit else cases
 
 
+def run_case(graph, settings, case: dict, index: int, tag: str, run_id: str) -> tuple[dict, bool, RunStats]:
+    """跑单条用例，返回 (明细, 是否通过, 统计)。
+
+    模型或网络异常按「本条失败」记账，不让一条用例炸掉整轮：实测 DeepSeek 余额不足时
+    402 直接把第 2 条之后的跑分全打断，看板连一轮完整数据都收不到。
+    """
+    request, expect = case["request"], case.get("expect") or {}
+    started = time.perf_counter()
+    stats = RunStats()
+    try:
+        report, stats, _ = plan_trip(graph, settings, request, session_id=f"eval-{tag}-{run_id}-{index}")
+        problems = evaluate_report(report, expect) if report is not None else ["模型未按 schema 返回"]
+    except Exception as exc:
+        stats = RunStats(elapsed_ms=round((time.perf_counter() - started) * 1000))
+        problems = [f"调用失败：{type(exc).__name__}: {str(exc)[:120]}"]
+    detail = {
+        "request": request,
+        "passed": not problems,
+        "tokens": stats.total_tokens,
+        "elapsed_ms": stats.elapsed_ms,
+        "problems": problems,
+    }
+    return detail, not problems, stats
+
+
 def run_cases(cases: list[dict], prompt_version: str | None = None, verbose: bool = True) -> dict:
     """跑一批用例，返回汇总结果（通过率、token、耗时、每条明细与失败原因）。"""
     graph, settings = build_agent(prompt_version=prompt_version)
@@ -35,33 +61,18 @@ def run_cases(cases: list[dict], prompt_version: str | None = None, verbose: boo
 
     details, problems_all = [], []
     passed = total_tokens = total_ms = 0
-    for idx, case in enumerate(cases, 1):
-        report, stats, thread = plan_trip(graph, settings, case["request"], session_id=f"eval-{tag}-{run_id}-{idx}")
+    for index, case in enumerate(cases, 1):
+        detail, ok, stats = run_case(graph, settings, case, index, tag, run_id)
         total_tokens += stats.total_tokens
         total_ms += stats.elapsed_ms
-
-        if report is None:
-            problems = ["模型未按 schema 返回"]
-        else:
-            problems = evaluate_report(report, case["expect"])
-
-        ok = not problems
         passed += int(ok)
-        problems_all.extend(problems)
+        problems_all.extend(detail["problems"])
         if verbose:
             mark = "PASS" if ok else "FAIL"
-            print(f"  [{idx}] {mark} {case['expect']['destination']} | {stats.as_line()}")
-            for p in problems:
-                print(f"        - {p}")
-        details.append(
-            {
-                "request": case["request"],
-                "passed": ok,
-                "tokens": stats.total_tokens,
-                "elapsed_ms": stats.elapsed_ms,
-                "problems": problems,
-            }
-        )
+            print(f"  [{index}] {mark} {case['expect']['destination']} | {stats.as_line()}")
+            for problem in detail["problems"]:
+                print(f"        - {problem}")
+        details.append(detail)
 
     return {
         "prompt_version": tag,

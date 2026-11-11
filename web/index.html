@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>旅行规划 Agent</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11Z"/><circle cx="12" cy="10" r="2.6"/></svg>
+      <div>
+        <h1>旅行规划 <em>Agent</em></h1>
+        <p class="sub">本地 POI 知识库 → 实时天气 → 不足才联网 → 可执行行程</p>
+      </div>
+    </div>
+    <button id="theme" class="icon" type="button" title="切换浅色/深色" aria-label="切换主题">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 13.3A8.6 8.6 0 1 1 10.7 3a7 7 0 0 0 10.3 10.3Z"/></svg>
+    </button>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2 class="card-title">出行需求</h2>
+      <textarea id="request" rows="3" placeholder="杭州 3天 2人 喜欢人文历史 不吃辣 人均预算1500"></textarea>
+
+      <div class="chips" id="chips">
+        <!-- 标签要短：整句提示词塞进 button 会在窄屏把页面撑破，完整内容放 data-fill -->
+        <button class="chip" type="button" data-fill="杭州 3天 2人 喜欢人文历史 不吃辣 人均预算1500">杭州 · 人文 3 天</button>
+        <button class="chip" type="button" data-fill="成都 4天 亲子 带5岁小孩 节奏要慢 需要室内备选 人均预算1200">成都 · 亲子 4 天</button>
+        <button class="chip" type="button" data-fill="大理 4天 自驾 想环洱海 摄影优先 日出日落点位 人均预算1000">大理 · 自驾摄影 4 天</button>
+        <button class="chip" type="button" data-fill="西安 2天 第一次去 想看兵马俑和城墙 尽量地铁出行 人均预算800">西安 · 首访 2 天</button>
+      </div>
+
+      <div class="fields">
+        <div class="field">
+          <label for="start">出发日期</label>
+          <input type="date" id="start">
+        </div>
+        <div class="field">
+          <label for="token">服务令牌<span class="hint">（未启用鉴权就留空）</span></label>
+          <input type="password" id="token" placeholder="可选" autocomplete="off">
+        </div>
+        <div class="field grow">
+          <label for="image">参考图片（可选）</label>
+          <label class="drop" id="drop">
+            <input type="file" id="image" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+            <span id="dropText">点这里选图，或把图片拖进来 · 单图 ≤8 MB · 需 TRAVEL_MODEL=qwen*</span>
+            <span class="thumb" id="thumbBox" hidden>
+              <img id="thumb" alt="已选图片预览">
+              <button id="clearImage" class="icon small" type="button" title="移除图片" aria-label="移除图片">×</button>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="go" class="primary" type="button">生成行程</button>
+        <button id="sample" class="ghost" type="button">载入示例行程</button>
+        <label class="switch"><input type="checkbox" id="follow"> 在上一轮会话上继续改</label>
+      </div>
+
+      <div class="progress" id="progress" hidden>
+        <div class="bar"><i></i></div>
+        <p id="progressText">正在检索知识库与天气…</p>
+      </div>
+
+      <p class="status" id="status" role="status"></p>
+    </section>
+
+    <section class="card" id="result" hidden></section>
+
+    <section class="card history">
+      <h2 class="card-title">历史会话 <button id="clearHistory" class="link" type="button">清空</button></h2>
+      <ul id="historyList" class="hlist"></ul>
+      <p class="empty" id="historyEmpty">还没有记录。生成一次行程后会存在本机浏览器里。</p>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>接口：<code>POST /plan</code> · <code>POST /export</code> · <code>GET /health</code></span>
+    <span id="modelTag">—</span>
+  </footer>
+</div>
+
+<script id="sample-plan" type="application/json">
+{"destination":"杭州","days":2,"traveler_profile":"示例数据（未调用模型）：2 人，喜欢人文历史，不吃辣，人均预算 1500 元","best_season_note":"11 月杭州白天 4~17℃，早晚偏凉需外套；博物馆类周一闭馆，德寿宫周末名额紧张要提前抢。","plan":[{"day":1,"theme":"孤山文脉","base_area":"西湖景区（孤山—北山街）","spots":[{"name":"浙江省博物馆（孤山馆区）","why":"河姆渡、良渚与青瓷常设展，理解浙江文脉的入口","minutes":120,"ticket_yuan":0},{"name":"西泠印社","why":"金石篆刻第一社，崖壁题刻与园林尺度极好","minutes":60,"ticket_yuan":75},{"name":"岳王庙","why":"南宋史核心现场，与德寿宫串成一条线索","minutes":75,"ticket_yuan":25}],"meals":["楼外楼（孤山店）西湖醋鱼、龙井虾仁，可要求不放辣","知味观（仁和路总店）片儿川"],"transport":"地铁 1 号线龙翔桥站步行入湖，全天湖区步行为主","day_cost_yuan":190},{"day":2,"theme":"南宋皇城与市井","base_area":"上城区（吴山—清河坊—德寿宫）","spots":[{"name":"南宋德寿宫遗址博物馆","why":"皇家宫苑原址露明展示，宋韵实物注脚","minutes":120,"ticket_yuan":0},{"name":"胡雪岩故居","why":"晚清江南第一豪宅，木雕砖雕与宅园层次","minutes":90,"ticket_yuan":20},{"name":"清河坊历史街区","why":"老字号与药号建筑集中，边逛边吃，适合下午体力下降时","minutes":90,"ticket_yuan":0}],"meals":["王润兴酒楼杭帮菜（点菜说明不要辣）","清河坊定胜糕、葱包桧儿"],"transport":"地铁 1 号线定安路站 + 步行，德寿宫到胡雪岩故居约 15 分钟","day_cost_yuan":150}],"budget_total_yuan":340,"risks":["德寿宫免费但需提前一天在官方公众号分时段预约，周一闭馆","浙江省博物馆孤山馆区周一闭馆，节假日建议公众号预约","灵隐飞来峰景区需线上实名预约，不支持当日预约","11 月有降雨日，已为第二天准备室内备选；石阶坡道雨后湿滑，穿防滑鞋","点菜时明确说明不要辣，部分小馆默认配辣椒酱"],"references":["https://www.deshoupg.cn/","https://www.zhejiangmuseum.com/","https://www.hangzhou.gov.cn/"],"summary":"两天按「孤山文脉 → 南宋皇城」一条人文主线推进，每天只集中在一个片区避免跨城赶场；预约与闭馆日是行程能否成立的关键。"}
+</script>
+<script src="/static/app.js"></script>
+</body>
+</html>

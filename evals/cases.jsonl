@@ -1,6 +1,6 @@
 {"request": "杭州 3天 2人 喜欢人文历史 不吃辣 人均预算1500 不含住宿", "expect": {"destination": "杭州", "days": 3, "max_budget": 1500, "require_sources": true}}
 {"request": "成都 4天 亲子 带5岁小孩 节奏要慢 需要室内备选（下雨） 人均预算1200", "expect": {"destination": "成都", "days": 4, "max_budget": 1200, "require_sources": true}}
-{"request": "西安 2天 第一次去 想看兵马俑和城墙 尽量地铁出行 人均预算800", "expect": {"destination": "西安", "days": 2, "max_budget": 800, "require_sources": true}}
+{"request": "西安 2天 第一次去 想看兵马俑和城墙 尽量地铁出行 人均预算800", "expect": {"destination": "西安", "days": 2, "max_budget": 800, "require_sources": true, "must_include": ["兵马俑", "城墙"]}}
 {"request": "厦门 3天 海边+美食 预算偏紧 人均800 不住海景房", "expect": {"destination": "厦门", "days": 3, "max_budget": 800, "require_sources": true}}
 {"request": "北京 5天 老人同行 少爬山 需要无障碍与休息点 人均预算1500", "expect": {"destination": "北京", "days": 5, "max_budget": 1500, "require_sources": true}}
-{"request": "大理 4天 自驾 想环洱海 摄影优先 日出日落点位 人均预算1000", "expect": {"destination": "大理", "days": 4, "max_budget": 1000, "require_sources": true}}
+{"request": "大理 4天 自驾 想环洱海 摄影优先 日出日落点位 人均预算1000", "expect": {"destination": "大理", "days": 4, "max_budget": 1000, "require_sources": true, "must_include": ["洱海", "日出"]}}

@@ -34,15 +34,19 @@ uv sync
 python main.py 杭州 3天 2人 喜欢人文历史 不吃辣 人均预算1500
 python main.py --session trip1 第二天改成雨天方案      # 复用会话
 python main.py --image 截图.png 这个景点值得去吗        # 需 TRAVEL_MODEL=qwen3.5-plus
+python main.py --export md,ics --start 2026-12-01 大理 4天 自驾   # 顺手导出行程文件
 
-python tests/test_offline.py   # 17 项，不联网（需要联网的子项自动跳过）
-python tests/test_service.py   # 6 项，TestClient 直打接口
+python tests/test_offline.py   # 35 项，不联网（需要联网的子项自动跳过）
+python tests/test_service.py   # 14 项，TestClient 直打接口
 python evals/run_eval.py --dry-run
 python evals/run_eval.py --record          # 端到端评测并写入看板
 python evals/ab_test.py --limit 3 --record # Prompt A/B 对比
 python evals/report.py                       # 渲染 reports/dashboard.md
 
-uvicorn service:app --host 127.0.0.1 --port 8000
+# 网页版：起服务后浏览器打开 http://127.0.0.1:8080/ （Windows 上 8000 常被系统保留，见踩坑 18）
+python -m uvicorn service:app --host 127.0.0.1 --port 8080
+# 想在不花 token 的情况下看完整排版：打开 http://127.0.0.1:8080/?demo=1
+# 深色/浅色可用 ?theme=dark|light 强制（也可点右上角按钮切换，选择记在本机浏览器里）
 $env:PYTHONUTF8 = "1"; langgraph dev         # Studio 可视化调试
 ```
 
@@ -58,17 +62,20 @@ travel/
   multimodal.py    图片输入：格式大小校验 + base64 content block
   prompts.py       v1/v2 两版提示词，支持 A/B
   graph.py         build_agent() + plan_trip()（无导入副作用）
+  export.py        行程导出：终端文本 / Markdown / ics 日历（纯标准库，可离线单测）
   studio.py        langgraph dev 专用入口（唯一保留「导入即建图」的地方）
   eval.py          行程质量规则（纯函数）
   observability.py 本轮 token 与耗时统计、成本估算
 data/pois.jsonl    21 条 POI 语料（含 verified_at 与来源）
-main.py            CLI（--session / --image）
-service.py         FastAPI：/health /plan，可选 X-Service-Token
+main.py            CLI（--session / --image / --export / --start / --out）
+service.py         FastAPI：/health /plan /export，可选 X-Service-Token
+web/               本地网页版：index.html + app.css + app.js（零构建、零 CDN，断网可开）
 evals/             用例、评测、A/B、看板数据
 reports/           history.jsonl + dashboard.md（评测趋势与失败分布）
 tests/             离线单测 + 服务层测试
 .github/workflows  CI：无密钥环境跑离线子集
 resources/         SQLite 会话库、向量缓存（已 gitignore）
+outputs/           导出的行程文件（已 gitignore）
 notebooks/         课程练习，与本项目无关
 legacy/            v1 单文件版本，仅作演进记录
 ```
@@ -82,6 +89,9 @@ legacy/            v1 单文件版本，仅作演进记录
 | **embedding 失败自动降级** | 语义召回不可用时切中文 bigram 关键词打分 | 不因外部接口挂掉就不可用；降级路径的局限（拦不住词面重合）在代码与测试里写明 |
 | **知识库带 TTL** | 每条 `verified_at`，超 180 天在工具输出里追加「可能过期，需复核」 | 门票和闭馆日会变；把数据新鲜度变成模型能看到的信号 |
 | **实时天气独立成工具** | Open-Meteo（免密钥）给降水/温度/日出日落，并提示室内备选 | 天气决定行程可行性，不能靠模型按季节猜 |
+| **天气按目的地时区 + 同名城市消歧** | `timezone=auto`；检索候选按「行政级别+人口」打分，境外常用名补拉丁名，输出带「城市，省州，国家」 | 写死北京时区会把巴黎日落显示成次日 00:16；中文地理库里「东京」只有江苏/浙江的村庄、「大阪」查不到 |
+| **工具必须自报能力边界** | 出行日期超出 16 天预报范围时，工具输出直接写明「只能当近期参考，保留用户日期」 | 实测模型会为了迁就天气窗口把用户的出行日期改写掉——数据可用性边界要由工具说，而不是靠提示词祈祷 |
+| **导出走纯函数、不进模型** | `travel/export.py` 只做 schema→文本/ics，ics 按 RFC 5545 折行转义 | 格式化是确定性的，不该再花 token；ics 折行必须按**字节**算，中文按字符切会写出坏文件 |
 | **结构化工具有两级兜底** | 没调用结构化工具时先从文本解析 JSON（花括号配平扫描），再在同一 thread 提醒一次 | 工具越多、提示词越长，模型越容易只回文本；A/B 实测就是这样暴露的 |
 | **工具输出必须紧凑** | POI 一条一行并截断字段；搜索只留「标题 \| 链接 + 220 字摘要」，`max_results` 5→3 | 工具输出直接进上下文，啰嗦的输出就是成本 |
 | **启动即校验** | `require_env()` 按 `TRAVEL_MODEL` 只校验必需 key | `base_url=None` 会让 SDK 静默回退到 `api.openai.com`，46 秒后才抛 Connection error |
@@ -94,9 +104,11 @@ legacy/            v1 单文件版本，仅作演进记录
 
 | 项目 | 结果 |
 | --- | --- |
-| 离线单测 | **17/17**（不联网；需联网子项在无密钥环境自动跳过，CI 可跑） |
-| 服务层测试 | **6/6**（TestClient，含 401/422/502/503 分支） |
-| 端到端评测 | **6/6 = 100%**，累计 78,346 token / 149,855 ms（平均 24.9 s/条） |
+| 离线单测 | **35/35**（不联网；需联网子项在无密钥环境自动跳过，CI 可跑） |
+| 服务层测试 | **14/14**（TestClient，含 401/422/502/503 分支、导出、网页与图片上传） |
+| 端到端评测 | **6/6 = 100%**，累计 78,667 token / 162,263 ms（平均 27.0 s/条；含新加的「中间天空转」规则与天气工具改造） |
+| 端到端评测（点名需求校验后） | 只跑完第 1 条（杭州 PASS）就因 DeepSeek **余额耗尽 402** 中断；`must_include` 的全量校验**待充值后复跑** |
+| HTTP 实测（导出与网页） | `GET /` 200、`/health` 200、`POST /export` 200（md+ics）；ics 事件数/折行/转义正确；空白需求 422、坏 plan 422 |
 | 可靠性重复采样 | 同一组 3 条用例跑 3 轮：**9/9 通过** |
 | 多模态实测 | qwen3.5-plus 正确识别截图内容并判定「非旅游场景」，13.5 s / 2,364 token |
 | HTTP 实测 | `POST /plan` 200：16.5 s，本轮 6,952 + 1,331 token，6 条风险、3 条来源 |
@@ -126,7 +138,11 @@ v2 一开始**通过率反而掉了 33%**：工具变多后模型偶尔只回文
 - [x] RAG：本地 POI + 混合召回 + TTL + 阈值标定
 - [x] 实时天气工具（免密钥）
 - [x] 服务化：FastAPI `/plan` `/health` + 可选 token 鉴权
+- [x] 行程导出：Markdown / ics 日历（CLI `--export`、接口 `/export`、网页下载）
+- [x] 本地网页版：`GET /` 一个静态页，生成 → 看行程 → 下载文件，支持多轮续写
+- [x] 评测单条用例异常不中断整轮（402/网络故障按「本条失败」记账，退出码仍非 0）
 - [x] 多模态输入 `--image`
+- [x] 网页版 A 档改造：时间轴排版、深色模式、移动端、图片上传入口、本机历史会话、示例态 `?demo=1`、失败重试提示
 - [x] CI（离线测试子集）
 - [ ] **P3** 交通工具/真实 POI 数据源定期抓取；失败看板接 LangSmith Dataset 做长期回归；日志脱敏与结构化；并发批量评测
 
@@ -146,12 +162,30 @@ v2 一开始**通过率反而掉了 33%**：工具变多后模型偶尔只回文
 12. **A/B 暴露了 v2 的可靠性退化**（通过率 100%→67%）：工具变多后模型偶尔不调结构化工具 → 两级兜底（文本 JSON 花括号配平解析 + 同 thread 提醒重试）。
 13. **自己的看板代码把自己跑崩了**：`summary["cases"]` 是用例数（int），我却当列表遍历取明细 → `TypeError`。真正的字段是 `details`。教训：看板这类「聚合代码」也要有数据契约，不然第一个崩的是自己的工具。
 14. **单次评测结论不可信**：LLM 有随机性，同一组用例重复 3 轮才敢下结论；A/B 结论脚本最初用「通过率+token 方向」的简单启发式，把「质量下降但成本下降」误判成「本版没有优势」，改成按质量优先、成本其次并提示样本量限制。
+15. **天气时区写死 `Asia/Shanghai`**：巴黎的日落被返回成「2026-11-10 日出 14:51、日落 2026-11-11T00:16」——时间是北京时间，日期还串到了第二天。定位办法：拿两个时区的城市各查一次对比。改 `timezone=auto`。
+16. **中文地理检索会把人骗了**：`language=zh` 检索「东京」只返回江苏/浙江两个村庄（`count=1` 直接命中错的），检索「大阪」返回 0 条 → 天气工具一直在「静默错」或「失败降级」。修复分三层：多候选按行政级别+人口打分、常用境外名补拉丁名兜底、输出里带上「城市，省州，国家」让小地名错得可见。**根因是这个模块一个单测都没有**，所以两个 bug 都能活到线上；本轮给它补了 6 个离线用例（网络层收进 `_get_json` 一个出口，桩掉即可全离线测）。
+17. **模型为了迁就工具改写用户日期**：`weather_forecast` 只给未来 4 天，用户说 12 月出行，它就产出「出行日期按天气数据覆盖的 11 月 10–13 日窗口安排」。这类错误格式合法、规则评测看不出来。改法是把边界声明放进**工具输出**（超出 16 天预报范围就返回「只能当近期参考，保留用户日期」），提示词只是补强；工具自报边界比提示词可靠。
+
+18. **网页版「打不开」不是代码问题，是端口被 Windows 保留**：`python -m uvicorn … --port 8000` 报
+    `[Errno 13] … [winerror 10013] 以一种访问权限不允许的方式做了一个访问套接字的尝试`，端口持有者是
+    System（PID 4）。排查：`netsh int ipv4 show excludedportrange protocol=tcp`——本机实测 8000/8800/8821/8850
+    都在 Hyper-V / WinNAT 的动态保留区间里，`bind` 直接失败，服务压根没起来，所以浏览器看到的是「无法访问」。
+    解法就是换个不在区间内的端口（文档统一改用 **8080**），不要去改系统保留区间。顺带一条同族坑：Windows
+    Smart App Control 会拦 `.venv\Scripts\uvicorn.exe` 这种入口脚本，用 `python -m uvicorn` 起即可。
+19. **`hidden` 属性被作者样式吃掉**：`.thumb { display: flex }` 让 `<span hidden>` 照样渲染，网页里冒出一张
+    「已选图片预览」的破图。UA 样式优先级最低，单文件页面必须补一条 `[hidden] { display: none !important; }`。
+20. **截图「右侧被裁」是假 bug**：Edge 无头截图 `--window-size=410,…` 有最小窗口宽度，布局按更宽的视口排好后
+    图片被裁，看起来像横向溢出。用探针页量 `documentElement.scrollWidth == clientWidth` 才确认布局没问题。
+    教训：**先用数据证伪，再改 CSS**——否则会把没病的地方越改越坏。
 
 ## 8. 已知风险
 
 - `data/pois.jsonl` 是**演示语料**：字段格式、TTL、阈值标定方法通用，但门票与闭馆时间需换成定期抓取的权威源才能上线。
 - 评测样本只有 6 条，且判定规则是启发式的（例如预算容差 10%）；扩样与人工抽检仍是必需。
 - Windows **Smart App Control** 会拦截未签名扩展（本机实测拦过 `uuid_utils/_uuid_utils.pyd`，重试即通过）。
+- 同类拦截也会挡住 `.venv\Scripts\uvicorn.exe` 这类入口脚本：用 `python -m uvicorn` 起服务即可。
+- `gradio` 在 pyproject 里声明了但代码没有一处使用，且本机 Python 3.14 上 `import gradio` 直接失败（pandas C 扩展 `DLL load failed`）→ 属于悬空依赖，网页版改用 FastAPI + 一个静态页实现，零新增依赖。
+- DeepSeek 余额不足会在 `graph.invoke` 抛 `402 Insufficient Balance`：评测已改为「单条失败记一笔、整轮继续」，但跑分结论仍然要等充值后重跑才算数。
 - `smith.langchain.com` / `api.tavily.com` 是境外服务，国内网络可能需要代理。
 - 服务默认只监听 `127.0.0.1`；对外必须设置 `SERVICE_TOKEN`。
 - `.env` 中曾长期存放明文云 AccessKey；`.env` 已 gitignore，但 AK/SK 权限远大于模型 key，不应明文长期存放。
