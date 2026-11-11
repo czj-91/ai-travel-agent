@@ -12,6 +12,8 @@ from datetime import date, timedelta
 import httpx
 from langchain.tools import tool
 
+from .security import wrap_untrusted
+
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 TIMEOUT = 12.0
@@ -269,7 +271,10 @@ def build_weather_tool(days: int = 4):
                 超出预报范围时工具会明确告知，此时保留用户日期、按季节常识安排
         """
         try:
-            return format_forecast(fetch_forecast(city, days=days, country=country, start_date=start_date))
+            return wrap_untrusted(
+            format_forecast(fetch_forecast(city, days=days, country=country, start_date=start_date)),
+            "open-meteo",
+        )
         except Exception as exc:
             return f"天气查询失败：{type(exc).__name__}: {str(exc)[:120]}。请改用 web_search 查询当地天气。"
 

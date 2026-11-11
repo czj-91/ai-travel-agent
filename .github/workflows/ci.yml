@@ -20,3 +20,17 @@ jobs:
         run: uv run python tests/test_service.py
       - name: 评测用例与规则自检
         run: uv run python evals/run_eval.py --dry-run
+
+  docker-build:
+    name: 镜像可构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 构建镜像（只验证可构建，不推送）
+        run: docker build -t ai-travel-agent:ci .
+      - name: 确认密钥不会进镜像
+        run: |
+          if docker run --rm --entrypoint ls ai-travel-agent:ci -la /app | grep -E '\\.env$'; then
+            echo "镜像里出现了 .env，构建失败" && exit 1
+          fi
+          echo "镜像内无 .env"

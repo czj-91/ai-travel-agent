@@ -4,11 +4,13 @@ langgraph dev / Studio 挂载的就是本模块里的 agent 对象。
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import uuid
 
 from langchain.agents import create_agent
+from langchain_core.messages import AIMessageChunk as _AIMessageChunk, ToolMessage as _ToolMessage
 from langchain.agents.middleware import SummarizationMiddleware
 from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.memory import InMemorySaver
@@ -188,3 +190,63 @@ def plan_trip(graph, settings: Settings, request: str, session_id: str | None = 
     stats = usage_from_messages({"messages": (result.get("messages") or [])[before:]})
     stats.elapsed_ms = timer.elapsed_ms
     return report, stats, thread
+
+
+def stream_plan(graph, settings, request: str, session_id: str | None = None, image_block=None):
+    """流式规划：逐段产出事件字典，最后给出结构化结果与本轮统计。
+
+    事件类型：start / tool_call / tool_result / plan / error。
+
+    为什么是同步生成器而不是 async：本项目 checkpointer 是 `SqliteSaver`，
+    它明确不支持 async（`astream` 会抛 NotImplementedError）。用同步 `graph.stream`
+    由 Starlette 放进线程池执行，代价是一个请求占一个线程槽——真要高并发得换
+    AsyncSqliteSaver 或 Postgres，这条已写进 README 的取舍说明。
+    """
+    check_image_model(settings.travel_model, bool(image_block))
+    content = build_content(request, image_block=image_block)
+    thread = session_id or f"cli-{uuid.uuid4().hex[:8]}"
+    config = {"configurable": {"thread_id": thread}}
+    before = _message_count(graph, config)
+
+    with Timer() as timer:
+        yield {"type": "start", "session_id": thread}
+        for chunk, meta in graph.stream({"messages": [("user", content)]}, config, stream_mode="messages"):
+            name = getattr(chunk, "name", None) or (meta.get("ls_agent_type") if isinstance(meta, dict) else None)
+            if isinstance(chunk, _ToolMessage):
+                yield {"type": "tool_result", "name": name, "preview": str(getattr(chunk, "content", ""))[:160]}
+            elif isinstance(chunk, _AIMessageChunk):
+                for call in (getattr(chunk, "tool_call_chunks", None) or getattr(chunk, "tool_calls", None) or []):
+                    call_name = call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
+                    if call_name:
+                        yield {"type": "tool_call", "name": call_name}
+                text = getattr(chunk, "content", "")
+                if isinstance(text, list):
+                    text = "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in text)
+                if text:
+                    yield {"type": "token", "text": str(text)}
+
+        result = graph.invoke(None, config)
+        messages = (result or {}).get("messages") or []
+        report = (result or {}).get("structured_response") or parse_structured_from_text(messages)
+        if report is None:
+            graph.invoke(
+                {"messages": [("user", "请按 schema 输出最终结果，必须调用 TripPlan 结构化工具，不要只回文本。")]},
+                config,
+            )
+            result = graph.invoke(None, config)
+            messages = (result or {}).get("messages") or []
+            report = (result or {}).get("structured_response") or parse_structured_from_text(messages)
+
+    stats = usage_from_messages({"messages": messages[before:]})
+    stats.elapsed_ms = timer.elapsed_ms
+    if report is None:
+        yield {"type": "error", "detail": "模型未按 schema 返回"}
+        return
+    yield {
+        "type": "plan",
+        "plan": json.loads(report.model_dump_json()),
+        "session_id": thread,
+        "elapsed_ms": stats.elapsed_ms,
+        "input_tokens": stats.input_tokens,
+        "output_tokens": stats.output_tokens,
+    }

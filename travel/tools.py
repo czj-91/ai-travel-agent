@@ -5,6 +5,8 @@ import time
 
 from langchain.tools import tool
 
+from .security import wrap_untrusted
+
 # Tavily 原始返回里 content 很长，还带 images/raw_content；整包塞进上下文会直接
 # 推高 token 并稀释模型注意力，所以只保留决策需要的「标题 | 链接 + 短摘要」。
 SNIPPET_LIMIT = 220
@@ -82,6 +84,6 @@ def build_search_tool(max_results: int = DEFAULT_MAX_RESULTS, retries: int = 2, 
             query: 检索词，例如 "杭州 3天 人文 景点 门票 闭馆 时间"
         """
         text, _ = search_with_retry(client, query, retries=retries, timeout=timeout)
-        return text
+        return wrap_untrusted(text, "tavily-web-search")
 
     return web_search

@@ -21,6 +21,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from langchain.tools import tool
 
+from .security import wrap_untrusted
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_PATH = BASE_DIR / "data" / "pois.jsonl"
 CACHE_PATH = BASE_DIR / "resources" / "poi_vectors.json"
@@ -207,6 +209,6 @@ def build_poi_tool(index: PoiIndex | None = None, top_k: int = 2):
             query: 景点名或主题词，例如 "兵马俑 预约" 或 "博物馆 周一闭馆"
             city: 可选，限定城市，例如 "西安"
         """
-        return idx.format_hits(idx.search(query, city=city, top_k=top_k))
+        return wrap_untrusted(idx.format_hits(idx.search(query, city=city, top_k=top_k)), "local-poi-kb")
 
     return poi_lookup

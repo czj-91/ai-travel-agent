@@ -89,6 +89,68 @@ function busy(on, text) {
   }
 }
 
+/* ---------------- 流式请求 ---------------- */
+/* 同步 /plan 要让人盯 20–40 秒白屏，所以默认走 SSE；
+   浏览器或代理不支持时自动退回一次性 /plan，功能不降级。 */
+async function postStream(path, body, onEvent) {
+  const headers = { "Content-Type": "application/json" };
+  const token = $("token").value.trim();
+  if (token) headers["X-Service-Token"] = token;
+  const resp = await fetch(path, { method: "POST", headers, body: JSON.stringify(body) });
+  if (!resp.ok) {
+    const raw = await resp.text();
+    let detail = raw;
+    try { detail = JSON.parse(raw).detail || raw; } catch (_) { /* 网关非 JSON 时原样显示 */ }
+    const err = new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    err.code = resp.status;
+    throw err;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let cut = buffer.indexOf("\n\n");
+    while (cut >= 0) {
+      const frame = buffer.slice(0, cut);
+      buffer = buffer.slice(cut + 2);
+      const line = frame.split("\n").find((item) => item.startsWith("data: "));
+      if (line) {
+        const payload = line.slice(6).trim();
+        if (payload === "[DONE]") return;
+        try { onEvent(JSON.parse(payload)); } catch (_) { /* 半帧忽略 */ }
+      }
+      cut = buffer.indexOf("\n\n");
+    }
+  }
+}
+
+async function streamOrPost(body, onDone) {
+  let result = null;
+  const tools = [];
+  try {
+    await postStream("/plan/stream", body, (ev) => {
+      if (ev.type === "tool_call") { tools.push(ev.name); onDone && onDone(tools); }
+      else if (ev.type === "plan") {
+        result = {
+          plan: ev.plan, session_id: ev.session_id,
+          input_tokens: ev.input_tokens, output_tokens: ev.output_tokens, elapsed_ms: ev.elapsed_ms,
+        };
+      } else if (ev.type === "error") { throw new Error(ev.detail || "流式生成失败"); }
+    });
+  } catch (err) {
+    if (err.code === 404 || err.code === 405) {
+      // 老版本服务端没有 /plan/stream
+      return await post("/plan", body);
+    }
+    throw err;
+  }
+  if (!result) throw new Error("流结束了但没拿到完整方案");
+  return result;
+}
+
 async function generate() {
   const request = $("request").value.trim();
   if (request.length < 2) { status("先写清目的地和天数，例如「杭州 3天 2人 喜欢人文 人均预算1500」。", "error"); return; }
@@ -98,7 +160,9 @@ async function generate() {
   busy(true, "正在查本地知识库与实时天气，并编排行程…");
   status("");
   try {
-    const data = await post("/plan", body);
+    const data = await streamOrPost(body, (tools) => {
+      $("progressText").textContent = "已调用工具：" + tools.join(" → ") + "…（整轮通常 20–40 秒）";
+    });
     state.session = data.session_id;
     showPlan(data.plan, { session: data.session_id, tokens: data.input_tokens + data.output_tokens, ms: data.elapsed_ms });
     $("follow").checked = true;

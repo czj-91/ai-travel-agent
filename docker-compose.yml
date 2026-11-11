@@ -1,0 +1,10 @@
+services:
+  app:
+    build: .
+    image: ai-travel-agent:latest
+    env_file: .env            # 密钥只从宿主注入，不进镜像层
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./resources:/app/resources   # 会话库与向量缓存留在宿主
+    restart: unless-stopped

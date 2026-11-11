@@ -59,6 +59,8 @@ client = TestClient(service.app)
 def _use_fake_agent(structured=_sample_plan(), model="deepseek-chat"):
     service._graph = _FakeGraph(structured)
     service._settings = SimpleNamespace(travel_model=model)
+    # 限流是进程内状态，测试之间必须清零，否则第 11 次请求会被 429 挡掉
+    service.reset_rate_limiter()
 
 
 PNG_DATA_URL = (
@@ -217,6 +219,87 @@ def test_plan_rejects_unusable_image_payloads():
     assert client.post("/plan", json={"request": "看图", "image": "data:image/png;base64,@@not base64@@"}).status_code == 422
     too_small = client.post("/plan", json={"request": "看图", "image": "data:text/plain;base64,aGVsbG8="})
     assert too_small.status_code == 422 and "不支持的图片格式" in too_small.json()["detail"], too_small.text
+
+
+class _FakeState:
+    def __init__(self, messages):
+        self.values = {"messages": messages, "structured_response": _sample_plan()}
+
+
+class _FakeStreamGraph:
+    """只实现 stream_plan 用到的三个方法，不碰真实模型。"""
+
+    def __init__(self):
+        self.calls = 0
+
+    def get_state(self, config):
+        return _FakeState([])
+
+    def stream(self, payload, config, stream_mode=None):
+        from langchain_core.messages import AIMessageChunk, ToolMessage
+
+        self.calls += 1
+        yield (
+            AIMessageChunk(
+                content="",
+                tool_call_chunks=[{"name": "poi_lookup", "args": "{}", "id": "c1", "index": 0}],
+            ),
+            {},
+        )
+        yield AIMessageChunk(content="正在安排第二天"), {}
+        yield ToolMessage(content="本地知识库命中 3 条", tool_call_id="c1", name="poi_lookup"), {}
+
+    def invoke(self, payload, config):
+        from types import SimpleNamespace
+
+        return {
+            "messages": [SimpleNamespace(usage_metadata={"input_tokens": 500, "output_tokens": 90}, content="x")],
+            "structured_response": _sample_plan(),
+        }
+
+
+def test_rate_limit_returns_429_with_retry_after():
+    from travel.security import RateLimiter
+
+    _use_fake_agent()
+    saved = service._limiter
+    service._limiter = RateLimiter(limit=2, window_seconds=60)
+    try:
+        assert client.post("/plan", json={"request": "杭州 1天"}).status_code == 200
+        assert client.post("/plan", json={"request": "杭州 1天"}).status_code == 200
+        third = client.post("/plan", json={"request": "杭州 1天"})
+        assert third.status_code == 429, third.text
+        assert "Retry-After" in third.headers
+        assert "每分钟上限 2" in third.json()["detail"]
+    finally:
+        service._limiter = saved
+
+
+def test_plan_stream_emits_sse_events():
+    service._graph = _FakeStreamGraph()
+    service._settings = SimpleNamespace(travel_model="deepseek-chat")
+    service.reset_rate_limiter()
+
+    resp = client.post("/plan/stream", json={"request": "杭州 1天 人文"})
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    body = resp.text
+    for fragment in ('"type": "start"', '"type": "tool_call"', '"type": "token"', '"type": "plan"', "[DONE]"):
+        assert fragment in body, f"缺少事件 {fragment}"
+    assert resp.headers.get("cache-control") == "no-cache"
+
+
+def test_plan_stream_rejects_blank_request():
+    service._graph = _FakeStreamGraph()
+    service._settings = SimpleNamespace(travel_model="deepseek-chat")
+    service.reset_rate_limiter()
+    assert client.post("/plan/stream", json={"request": "   "}).status_code == 422
+
+
+def test_cors_blocks_unlisted_origin():
+    _use_fake_agent()
+    bad = client.options("/plan", headers={"Origin": "http://evil.example", "Access-Control-Request-Method": "POST"})
+    assert "access-control-allow-origin" not in {k.lower() for k in bad.headers}
 
 
 if __name__ == "__main__":

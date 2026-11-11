@@ -19,22 +19,40 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import threading
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse  # 0.162 起顶层不再导出，必须从 responses 拿
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse  # 0.162 起顶层不再导出，必须从 responses 拿
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from travel import export as exporter
 from travel.config import MissingEnvError, load_settings
-from travel.graph import build_agent, plan_trip
+from travel.graph import build_agent, plan_trip, stream_plan
 from travel.multimodal import ImageInputError, check_image_model, parse_data_image
 from travel.schemas import TripPlan
+from travel.security import RateLimiter, origins_from_env
 
-app = FastAPI(title="AI Travel Agent", version="0.4.0")
+app = FastAPI(title="AI Travel Agent", version="0.5.0")
+
+# 跨源默认只放行本机页面；allow_credentials 关掉：鉴权走 X-Service-Token，不靠 cookie
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins_from_env(),
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-Service-Token"],
+)
+
+# 一次 /plan 要烧上万 token，没有限流就等于把额度交给网页刷新按钮
+_limiter = RateLimiter(
+    limit=int(os.getenv("RATE_LIMIT_PER_MIN") or 10),
+    window_seconds=int(os.getenv("RATE_WINDOW_SECONDS") or 60),
+)
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"
 INDEX_PATH = WEB_DIR / "index.html"
@@ -61,6 +79,30 @@ def require_token(x_service_token: str | None = Header(default=None)):
     token = (os.getenv("SERVICE_TOKEN") or "").strip()
     if token and x_service_token != token:
         raise HTTPException(status_code=401, detail="缺少或错误的 X-Service-Token")
+    return True
+
+
+def reset_rate_limiter() -> None:
+    """清空限流窗口：测试必须能隔离状态，运维需要手动解闸。"""
+    _limiter.reset()
+
+
+def _client_key(request: Request) -> str:
+    """反代后面优先取 X-Forwarded-For 的第一个地址，否则用直连 IP。"""
+    forwarded = request.headers.get("x-forwarded-for") or ""
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def limit_requests(request: Request):
+    allowed, retry_after = _limiter.check(_client_key(request))
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"请求过快，请 {retry_after} 秒后重试（每分钟上限 {_limiter.limit} 次）",
+            headers={"Retry-After": str(int(retry_after) or 1)},
+        )
     return True
 
 
@@ -126,7 +168,7 @@ def index():
     return FileResponse(INDEX_PATH, media_type="text/html")
 
 
-@app.post("/export", response_model=ExportResponse, dependencies=[Depends(require_token)])
+@app.post("/export", response_model=ExportResponse, dependencies=[Depends(require_token), Depends(limit_requests)])
 def export(payload: ExportRequest):
     if not payload.formats:
         raise HTTPException(status_code=422, detail="formats 不能为空")
@@ -155,7 +197,7 @@ def export(payload: ExportRequest):
     )
 
 
-@app.post("/plan", response_model=PlanResponse, dependencies=[Depends(require_token)])
+@app.post("/plan", response_model=PlanResponse, dependencies=[Depends(require_token), Depends(limit_requests)])
 def plan(payload: PlanRequest):
     try:
         graph, settings = get_agent()
@@ -189,4 +231,44 @@ def plan(payload: PlanRequest):
         input_tokens=stats.input_tokens,
         output_tokens=stats.output_tokens,
         plan=report.model_dump(),
+    )
+
+
+def _sse(event: dict) -> str:
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+@app.post("/plan/stream", dependencies=[Depends(require_token), Depends(limit_requests)])
+def plan_stream(payload: PlanRequest):
+    """流式规划：边跑边推 token 与工具事件，最后推完整 plan。
+
+    同步 /plan 要让人对着白屏等 27 秒，Agent 产品的体验关键就在这条流上。
+    """
+    try:
+        graph, settings = get_agent()
+    except MissingEnvError as exc:
+        raise HTTPException(status_code=503, detail=str(exc).splitlines()[0]) from exc
+
+    image_block = None
+    if payload.image:
+        try:
+            image_block = parse_data_image(payload.image)
+        except ImageInputError as exc:
+            raise HTTPException(status_code=422, detail=f"图片不可用：{exc}") from exc
+
+    def events():
+        try:
+            for event in stream_plan(graph, settings, payload.request, payload.session_id, image_block):
+                yield _sse(event)
+        except ValueError as exc:
+            yield _sse({"type": "error", "detail": str(exc)})
+        except Exception:
+            # 不把内部异常原文透给调用方
+            yield _sse({"type": "error", "detail": "规划失败：服务端异常"})
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )

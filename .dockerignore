@@ -1,0 +1,18 @@
+# 密钥与本机环境：绝对不能进镜像构建上下文
+.env
+.venv/
+.idea/
+.git/
+.gitignore
+
+# 运行产物与本地数据
+resources/
+outputs/
+reports/
+__pycache__/
+*.pyc
+.langgraph_api/
+notebooks/
+web/node_modules/
+Dockerfile
+docker-compose.yml
