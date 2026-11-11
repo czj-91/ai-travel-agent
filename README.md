@@ -76,7 +76,7 @@ tests/             离线单测 + 服务层测试
 .github/workflows  CI：无密钥环境跑离线子集
 resources/         SQLite 会话库、向量缓存（已 gitignore）
 outputs/           导出的行程文件（已 gitignore）
-notebooks/         课程练习，与本项目无关
+notebooks/         课程练习（本地保留，不进仓库：老师分发的教学材料不做二次分发）
 legacy/            v1 单文件版本，仅作演进记录
 ```
 

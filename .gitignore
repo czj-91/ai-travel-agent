@@ -29,3 +29,6 @@ dist/
 
 # langgraph dev 本地运行时数据
 .langgraph_api/
+
+# 课程练习（老师分发的教学材料，不做二次分发；本地保留）
+notebooks/
