@@ -236,7 +236,8 @@ v2 一开始**通过率反而掉了 33%**：工具变多后模型偶尔只回文
 - [x] **SSE 流式接口** `/plan/stream` + 前端流式消费（不支持时自动退回 `/plan`）；`writing` 进度事件、可取消、错误分类、图片能力门控
 - [x] **安全与成本基线**：外部内容定界、IP 速率限制、CORS 白名单、异常脱敏
 - [x] **Dockerfile + compose**（非 root 运行、healthcheck、`.env` 不进镜像，CI 验证可构建）
-- [ ] **容器化（现在是必需项，不是加分项）**：本机 Windows Smart App Control 已让项目不可用，而 Linux runner 全绿——Docker/WSL 是唯一的可复现出路
+- [x] 容器化：Dockerfile（非 root + healthcheck）、compose、`.dockerignore` 排除 `.env`，CI 验证可构建
+- [ ] **本机容器实跑验证**：镜像只在 Linux CI 上构建通过，开发机未装 Docker，所以「容器能绕开 Windows Smart App Control」这条目前只有构建证据、没有运行证据
 - [x] **评测扩到 20 条 + LLM-as-judge + 三臂对比实验**（裸模型 / 裸模型+结构化 / 本系统）
 - [x] **事实核对器收紧**：名称相似度门槛 + 真实误报样本回归测试
 - [x] 并发批量评测 `--parallel N`；RRF 混合检索与 Recall@k/nDCG@k；会话库清理工具；ruff + pre-commit + CHANGELOG
