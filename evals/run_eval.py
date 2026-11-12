@@ -6,6 +6,7 @@
 
 评测规则见 travel/eval.py（纯函数，可离线单测）。run_cases() 可被 ab_test 复用。
 """
+
 from __future__ import annotations
 
 import json
@@ -15,10 +16,10 @@ import time
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from travel.eval import evaluate_report  # noqa: E402
-from travel.judge import average_score, build_judge, fact_check_vs_kb  # noqa: E402
-from travel.graph import build_agent, plan_trip  # noqa: E402
-from travel.observability import RunStats  # noqa: E402
+from travel.eval import evaluate_report
+from travel.graph import build_agent, plan_trip
+from travel.judge import average_score, build_judge, fact_check_vs_kb
+from travel.observability import RunStats
 
 CASES = os.path.join(os.path.dirname(__file__), "cases.jsonl")
 
@@ -29,7 +30,9 @@ def load_cases(limit: int | None = None) -> list[dict]:
     return cases[:limit] if limit else cases
 
 
-def run_case(graph, settings, case: dict, index: int, tag: str, run_id: str, use_judge: bool = False) -> tuple[dict, bool, RunStats]:
+def run_case(
+    graph, settings, case: dict, index: int, tag: str, run_id: str, use_judge: bool = False
+) -> tuple[dict, bool, RunStats]:
     """跑单条用例，返回 (明细, 是否通过, 统计)。
 
     模型或网络异常按「本条失败」记账，不让一条用例炸掉整轮：实测 DeepSeek 余额不足时
@@ -63,7 +66,6 @@ def run_case(graph, settings, case: dict, index: int, tag: str, run_id: str, use
     return detail, not problems, stats
 
 
-
 _JUDGE = None
 _KB = None
 
@@ -85,7 +87,9 @@ def _kb_index():
     return _KB
 
 
-def run_cases(cases: list[dict], prompt_version: str | None = None, verbose: bool = True, use_judge: bool = False) -> dict:
+def run_cases(
+    cases: list[dict], prompt_version: str | None = None, verbose: bool = True, use_judge: bool = False
+) -> dict:
     """跑一批用例，返回汇总结果（通过率、token、耗时、每条明细与失败原因）。"""
     graph, settings = build_agent(prompt_version=prompt_version)
     run_id = time.strftime("%m%d-%H%M%S")
@@ -120,11 +124,68 @@ def run_cases(cases: list[dict], prompt_version: str | None = None, verbose: boo
     }
 
 
+def run_cases_parallel(
+    cases: list[dict],
+    prompt_version: str | None = None,
+    use_judge: bool = False,
+    parallel: int = 4,
+    verbose: bool = True,
+) -> dict:
+    """并发跑用例：每条用例的 thread_id 本来就互相独立，串行只是浪费。
+
+    实测串行 20 条约 8.3 分钟；并发 4 能压到 2-3 分钟。
+    注意 graph 与 checkpointer 是多线程共享的，SQLite 连接开了 check_same_thread=False，
+    写入由 sqlite 自身串行化保证，因此这里只并行「等模型」的部分。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    graph, settings = build_agent(prompt_version=prompt_version)
+    run_id = time.strftime("%m%d-%H%M%S")
+    tag = prompt_version or os.getenv("PROMPT_VERSION") or "v2"
+
+    with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
+        futures = {
+            index: pool.submit(run_case, graph, settings, case, index, tag, run_id, use_judge)
+            for index, case in enumerate(cases, 1)
+        }
+        collected = {index: future.result() for index, future in futures.items()}
+
+    details, problems_all = [], []
+    passed = total_tokens = total_ms = 0
+    for index in sorted(collected):
+        detail, ok, stats = collected[index]
+        total_tokens += stats.total_tokens
+        total_ms += stats.elapsed_ms
+        passed += int(ok)
+        problems_all.extend(detail["problems"])
+        details.append(detail)
+        if verbose:
+            mark = "PASS" if ok else "FAIL"
+            print(f"  [{index}] {mark} {cases[index - 1]['expect']['destination']} | {stats.as_line()}")
+            for problem in detail["problems"]:
+                print(f"        - {problem}")
+
+    return {
+        "prompt_version": tag,
+        "fact_mismatches": sum(len(d["fact_mismatches"]) for d in details),
+        "judge_scores": [d["judge_avg"] for d in details if d.get("judge_avg") is not None],
+        "model": settings.travel_model,
+        "cases": len(cases),
+        "passed": passed,
+        "total_tokens": total_tokens,
+        "total_ms": total_ms,
+        "parallel": parallel,
+        "problems": problems_all,
+        "details": details,
+    }
+
+
 def main(argv: list[str]) -> int:
     limit = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else None
     version = argv[argv.index("--prompt-version") + 1] if "--prompt-version" in argv else None
     record = "--record" in argv
     use_judge = "--judge" in argv
+    parallel = int(argv[argv.index("--parallel") + 1]) if "--parallel" in argv else 1
 
     if "--dry-run" in argv:
         cases = load_cases(limit)
@@ -134,14 +195,14 @@ def main(argv: list[str]) -> int:
 
     cases = load_cases(limit)
     print(f"提示词版本 = {version or 'v2(默认)'} | 用例数 = {len(cases)}")
-    summary = run_cases(cases, version, use_judge=use_judge)
+    if parallel > 1:
+        summary = run_cases_parallel(cases, version, use_judge=use_judge, parallel=parallel)
+    else:
+        summary = run_cases(cases, version, use_judge=use_judge)
 
     rate = summary["passed"] / summary["cases"] if summary["cases"] else 0
     planned = [d for d in summary["details"] if d.get("fact_mismatches") is not None]
-    print(
-        f"  与本地知识库门票价不一致 = {summary['fact_mismatches']} 条"
-        f"（{len(planned)} 条方案参与核对）"
-    )
+    print(f"  与本地知识库门票价不一致 = {summary['fact_mismatches']} 条（{len(planned)} 条方案参与核对）")
     scores = summary.get("judge_scores") or []
     if scores:
         print(f"  LLM-as-judge 均分 = {sum(scores) / len(scores):.2f} / 5（{len(scores)} 条已判分）")
@@ -151,7 +212,7 @@ def main(argv: list[str]) -> int:
     )
 
     if record:
-        from evals.history import append_record, render_dashboard  # noqa: E402
+        from evals.history import append_record, render_dashboard
 
         append_record(summary)
         render_dashboard()

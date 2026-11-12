@@ -39,7 +39,9 @@ python main.py --export md,ics --start 2026-12-01 大理 4天 自驾   # 顺手�
 python tests/test_offline.py   # 35 项，不联网（需要联网的子项自动跳过）
 python tests/test_service.py   # 14 项，TestClient 直打接口
 python evals/run_eval.py --dry-run
-python evals/run_eval.py --record          # 端到端评测并写入看板
+python evals/run_eval.py --parallel 4 --judge --record   # 并发评测并写入看板
+python evals/retrieval.py                  # 检索质量：Recall@k / P@1 / nDCG@k
+python -m travel.memory --keep-recent 2    # 会话库清理（默认 dry-run，加 --apply 才删）
 python evals/ab_test.py --limit 3 --record # Prompt A/B 对比
 python evals/report.py                       # 渲染 reports/dashboard.md
 
@@ -71,6 +73,7 @@ travel/
   studio.py        langgraph dev 专用入口（唯一保留「导入即建图」的地方）
   eval.py          行程质量规则（纯函数）
   observability.py 本轮 token 与耗时统计、成本估算
+  memory.py        会话库清理：按 thread 前缀删评测/调试会话，默认 dry-run
   security.py      外部内容定界（防注入）、IP 速率限制、CORS 白名单
 data/pois.jsonl    21 条 POI 语料（含 verified_at 与来源）
 main.py            CLI（--session / --image / --export / --start / --out）
@@ -78,7 +81,10 @@ service.py         FastAPI：/health /plan /export，可选 X-Service-Token
 web/               本地网页版：index.html + app.css + app.js（零构建、零 CDN，断网可开）
 Dockerfile         非 root 镜像 + healthcheck；.dockerignore 保证 .env 不进镜像
 docker-compose.yml 一条命令起服务，密钥只从宿主 .env 注入
-evals/             用例、评测、A/B、看板数据
+ruff.toml / .pre-commit-config.yaml  静态检查与本地钩子（同一版本在 CI 复跑）
+CHANGELOG.md     按版本记录变更，含被证伪的结论
+INTERVIEW.md     简历写法、三个 STAR 故事、追问预案、演示脚本
+evals/             用例、评测（含 --parallel）、A/B、三臂对比、检索指标与看板
 reports/           history.jsonl + dashboard.md（评测趋势与失败分布）
 tests/             离线单测 + 服务层测试
 .github/workflows  CI：无密钥环境跑离线子集
@@ -113,14 +119,16 @@ legacy/            v1 单文件版本，仅作演进记录
 | 项目 | 结果 |
 | --- | --- |
 | 离线单测 | **41/41**（不联网；需联网子项在无密钥环境自动跳过，CI 可跑） |
-| 服务层测试 | **18/18**（TestClient，含 401/422/429/502/503、导出、网页、图片上传与 SSE 流式） |
-| 端到端评测（20 条用例） | **20/20 = 100%**，305,277 token / 495,165 ms（平均 24.8 s/条）；LLM-as-judge 均分 **3.63/5**；与本地知识库门票价不一致 **0 条** |
-| HTTP 实测（导出与网页） | `GET /` 200、`/health` 200、`POST /export` 200（md+ics）；ics 事件数/折行/转义正确；空白需求 422、坏 plan 422 |
-| CI（GitHub Actions, Linux） | **首次跑绿** @ `501ad14`：`offline-tests` job success |
-| 可靠性重复采样 | 同一组 3 条用例跑 3 轮：**9/9 通过** |
+| 服务层测试 | **18/18**（TestClient，含 401/422/429/502/503、导出、网页、图片上传与 SSE） |
+| 会话库测试 | **4/4**（临时 sqlite，不碰真实数据库） |
+| 检索指标测试 | **3/3**（锁住 nDCG 上界、RRF 融合行为） |
+| 端到端评测（20 条用例，并发 4） | **20/20 = 100%**，304,803 token / 477,350 ms（单条均值 23.9 s）；LLM-as-judge **3.89/5**；与知识库门票价不一致 **0 条** |
+| 检索质量（20 条人工标注查询） | keyword 与 embedding 均 Recall@3 **0.950** / P@1 0.950 / nDCG@3 0.950；**hybrid(RRF) 全部 1.000** |
+| CI（GitHub Actions, Linux） | 三个 job：`offline-tests`、`代码检查(ruff)`、`镜像可构建` |
+| 会话库清理 | `checkpoint.db` **30.82 MB → 2.35 MB**（删 133 个 eval thread / 6527 行） |
+| SSE 流式实测 | 19 帧，`start → tool_call/tool_result ×5 → plan`，21,995 ms |
 | 多模态实测 | qwen3.5-plus 正确识别截图内容并判定「非旅游场景」，13.5 s / 2,364 token |
-| HTTP 实测 | `POST /plan` 200：16.5 s，本轮 6,952 + 1,331 token，6 条风险、3 条来源 |
-| SSE 流式实测 | `POST /plan/stream` 真实跑通：19 帧，事件序列 `start → tool_call/tool_result ×5 → plan`，21,995 ms，11,963 + 1,902 token |
+| Lint | `ruff check` 全通过、`ruff format --check` 36 文件一致 |
 
 ### 成本演进（同样 6 条用例）
 
@@ -202,7 +210,7 @@ v2 一开始**通过率反而掉了 33%**：工具变多后模型偶尔只回文
 - [x] 评测单条用例异常不中断整轮（402/网络故障按「本条失败」记账，退出码仍非 0）
 - [x] 多模态输入 `--image`
 - [x] 网页版 A 档改造：时间轴排版、深色模式、移动端、图片上传入口、本机历史会话、示例态 `?demo=1`、失败重试提示
-- [x] CI（离线测试子集）——**已在 commit 501ad14 首次跑绿**：35 项离线单测 + 14 项服务层测试 + 用例自检
+- [x] CI（离线测试子集 + ruff + 镜像构建）
 - [x] 网页前端（`web/`，零构建零 CDN）与行程导出（txt / Markdown / **ics**，按 RFC 5545 折行转义）
 - [x] **SSE 流式接口** `/plan/stream` + 前端流式消费（不支持时自动退回 `/plan`）
 - [x] **安全与成本基线**：外部内容定界、IP 速率限制、CORS 白名单、异常脱敏
@@ -210,7 +218,8 @@ v2 一开始**通过率反而掉了 33%**：工具变多后模型偶尔只回文
 - [ ] **容器化（现在是必需项，不是加分项）**：本机 Windows Smart App Control 已让项目不可用，而 Linux runner 全绿——Docker/WSL 是唯一的可复现出路
 - [x] **评测扩到 20 条 + LLM-as-judge + 三臂对比实验**（裸模型 / 裸模型+结构化 / 本系统）
 - [x] **事实核对器收紧**：名称相似度门槛 + 真实误报样本回归测试
-- [ ] **P3** 真实 POI 数据源定期抓取（当前 21 条为演示语料）；失败看板接 LangSmith Dataset 做长期回归；日志脱敏与结构化；并发批量评测；AsyncSqliteSaver 改造以支持真异步
+- [x] 并发批量评测 `--parallel N`；RRF 混合检索与 Recall@k/nDCG@k；会话库清理工具；ruff + pre-commit + CHANGELOG
+- [ ] **P3** 真实 POI 数据源定期抓取（当前 21 条为演示语料）；LangSmith Dataset 做长期回归；日志脱敏与结构化；AsyncSqliteSaver 改造以支持真异步；并发评测改增量输出
 
 ## 7. 踩坑记录（真实排障过程）
 
@@ -247,6 +256,18 @@ v2 一开始**通过率反而掉了 33%**：工具变多后模型偶尔只回文
 15. **CI 第一次跑绿才暴露「只在我机器上能过」的测试**：`test_health_reports_missing_config` 里写的是 `os.environ.pop("DEEPSEEK_API_KEY")`（无默认值）。本机有 `.env`，变量必然存在，测试一直过；CI 环境没有 `.env`，`pop` 直接抛 `KeyError`，服务层测试整条红。修法是把 `pop` 的默认值补上并只在原值存在时回写。**教训：测试不能假设运行环境里有密钥**——这类缺陷本地永远发现不了，也正是 CI 的价值。（顺带说明：badge 挂上去但 CI 是红的，比不挂 badge 更扣分。）
 
 16. **本机被 Windows Smart App Control 卡死时的临时绕行**：`_uuid_utils.pyd` 被持续拦截会让 `import langchain_core` 直接失败。查了三处调用点（langchain-core / langgraph-api / langsmith）用的都是同一个接口 `uuid_utils.compat.uuid7()`，于是用一个**纯 Python 的 uuid7 兼容层**放到 `PYTHONPATH` 最前面顶掉它，不改 venv、删掉即恢复。本机因此恢复到 35/35 + 14/14 可跑。**这只是本机权宜之计**，正解是容器化（Linux 镜像没有 SAC），已列在路线图必需项。
+
+23. **nDCG 算出 1.85（上限应是 1）**：IDCG 用了 `sorted(...)` 默认**升序**，理想增益被排到末尾，
+    分母变小、比值虚高约 2 倍。同时发现重复文档会让 nDCG 到 2.13，于是指标计算前先按文档去重。
+    现在每条指标都有「上界/下界断言」，专门防这类荒谬值。
+24. **测试期望本身写错两次**：一是断言「相关文档全命中时换序 nDCG 应 <1」——增益全为 1 时排列不改变 DCG，
+    正确期望是等于 1；二是 3 个 eval thread、`keep_recent=1` 应剩 **1** 个，我写成 2。
+    **测试也会写错，所以断言失败时先怀疑断言，再怀疑实现。**
+25. **ruff 一上来报 966 个错，绝大多数是噪声**：RUF001/002/003 把中文全角标点（，：）当"歧义 unicode"。
+    关掉这三条后剩 66 个真实风格问题，`--fix` 修掉 55 个，剩下的手工处理，最终 `check` 与 `format --check` 全绿。
+    另外 `ruff 0.8.6` 不认 `target-version = "py314"`，得用 0.17.x——**配置文件本身也会写错，必须真跑一遍才知道**。
+26. **并发评测没有增量输出**：`run_cases_parallel` 先收集全部 future 再打印，跑 20 条期间日志只有一行，
+    看起来像卡死。功能正确但可观测性差，待改成 `as_completed` 增量打印。
 
 ## 8. 已知风险
 

@@ -1,0 +1,19 @@
+line-length = 110
+target-version = "py314"
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+  "E501",    # 长行交给 formatter，中文注释容易超
+  "B008",    # FastAPI 惯用 Depends() 作为参数默认值
+  "RUF001",  # 中文项目里全角标点（逗号、冒号、括号）是正常书写，不是"歧义 unicode"
+  "RUF002",
+  "RUF003",
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["E402"]      # 测试要先改 sys.path 再导入被测包
+"evals/*" = ["E402"]      # 同上
+
+[format]
+quote-style = "double"

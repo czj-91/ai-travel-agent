@@ -6,21 +6,20 @@
     python evals/compare.py --limit 6
     python evals/compare.py --limit 6 --judge
 """
+
 from __future__ import annotations
 
 import json
 import os
 import sys
 import time
-from types import SimpleNamespace
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from evals.run_eval import _judge, _kb_index, load_cases, run_cases  # noqa: E402
-from travel.eval import evaluate_report  # noqa: E402
-from travel.graph import parse_structured_from_text  # noqa: E402
-from travel.judge import average_score, build_judge, fact_check_vs_kb  # noqa: E402
-from travel.observability import RunStats, usage_from_messages  # noqa: E402
+from evals.run_eval import _judge, _kb_index, load_cases, run_cases
+from travel.eval import evaluate_report
+from travel.judge import average_score, fact_check_vs_kb
+from travel.observability import RunStats, usage_from_messages
 
 BARE_SYSTEM = (
     "你是旅行规划师。根据用户需求直接给出行程方案，只输出一个 JSON 对象，不要提问、不要解释。"
@@ -95,17 +94,16 @@ def bare_plan_case(model, case: dict, use_judge: bool) -> dict:
     report = None
     problems = ["调用失败"]
     try:
-        response = model.invoke(
-            [SystemMessage(content=BARE_SYSTEM), HumanMessage(content=case["request"])]
-        )
+        response = model.invoke([SystemMessage(content=BARE_SYSTEM), HumanMessage(content=case["request"])])
         report, parse_error = _extract_report(response)
         stats = usage_from_messages({"messages": [response]})
-        if isinstance(response, dict) and isinstance(response.get("raw"), object) and hasattr(response["raw"], "usage_metadata"):
+        if (
+            isinstance(response, dict)
+            and isinstance(response.get("raw"), object)
+            and hasattr(response["raw"], "usage_metadata")
+        ):
             stats = usage_from_messages({"messages": [response["raw"]]})
-        if report is None:
-            problems = [parse_error]
-        else:
-            problems = evaluate_report(report, case.get("expect") or {})
+        problems = [parse_error] if report is None else evaluate_report(report, case.get("expect") or {})
     except Exception as exc:
         problems = [f"调用失败：{type(exc).__name__}: {str(exc)[:120]}"]
     stats.elapsed_ms = round((time.perf_counter() - started) * 1000)
@@ -157,7 +155,9 @@ def main(argv: list[str]) -> int:
         row = bare_plan_case(model, case, use_judge)
         bare_rows.append(row)
         mark = "PASS" if row["passed"] else "FAIL"
-        print(f"  [{index}] {mark} {case['expect']['destination']} | {row['tokens']:,} token | {row['elapsed_ms']:,} ms")
+        print(
+            f"  [{index}] {mark} {case['expect']['destination']} | {row['tokens']:,} token | {row['elapsed_ms']:,} ms"
+        )
         for problem in row["problems"]:
             print(f"        - {problem}")
 
@@ -168,7 +168,9 @@ def main(argv: list[str]) -> int:
         row = bare_plan_case(structured_model, case, use_judge)
         structured_rows.append(row)
         mark = "PASS" if row["passed"] else "FAIL"
-        print(f"  [{index}] {mark} {case['expect']['destination']} | {row['tokens']:,} token | {row['elapsed_ms']:,} ms")
+        print(
+            f"  [{index}] {mark} {case['expect']['destination']} | {row['tokens']:,} token | {row['elapsed_ms']:,} ms"
+        )
         for problem in row["problems"]:
             print(f"        - {problem}")
 

@@ -6,6 +6,7 @@
 platform_persistence=True：不挂自定义 checkpointer。langgraph dev 会因为图里带
 SqliteSaver 这类自定义 checkpointer 直接抛 GraphLoadError 拒绝启动（持久化由平台接管）。
 """
+
 from travel.graph import build_agent
 
 agent, settings = build_agent(platform_persistence=True)

@@ -1,0 +1,20 @@
+{"query": "兵马俑 门票 预约", "city": "西安", "relevant": ["xa-bingmayong"]}
+{"query": "西安城墙 骑行", "city": "西安", "relevant": ["xa-chengqiang"]}
+{"query": "陕西历史博物馆 免费票 抢号", "city": "西安", "relevant": ["xa-shaanxi-museum"]}
+{"query": "周一闭馆 博物馆 杭州", "city": "杭州", "relevant": ["hz-zj-museum", "hz-silk-museum", "hz-deshou"]}
+{"query": "灵隐寺 需要预约吗", "city": "杭州", "relevant": ["hz-lingyin"]}
+{"query": "岳飞墓 南宋", "city": "杭州", "relevant": ["hz-yueling"]}
+{"query": "金石 篆刻 社团", "city": "杭州", "relevant": ["hz-xiling"]}
+{"query": "熊猫 幼崽 亲子", "city": "成都", "relevant": ["cd-panda"]}
+{"query": "皮影 木偶 室内 雨天", "city": "成都", "relevant": ["cd-museum"]}
+{"query": "三国 武侯 红墙", "city": "成都", "relevant": ["cd-wuhou"]}
+{"query": "故宫 提前几天预约 周一", "city": "北京", "relevant": ["bj-dugong"]}
+{"query": "国家博物馆 复兴之路", "city": "北京", "relevant": ["bj-guojie"]}
+{"query": "昆明湖 长廊 电瓶车 老人", "city": "北京", "relevant": ["bj-yiheyuan"]}
+{"query": "藏传佛教 木佛", "city": "北京", "relevant": ["bj-yonghegong"]}
+{"query": "轮渡票 提前买 海岛", "city": "厦门", "relevant": ["xm-gulangyu"]}
+{"query": "素斋 沙滩 大学", "city": "厦门", "relevant": ["xm-nanputuo"]}
+{"query": "洱海 生态廊道 机动车禁入", "city": "大理", "relevant": ["dl-langdao"]}
+{"query": "三塔 苍山 同框", "city": "大理", "relevant": ["dl-santa"]}
+{"query": "白色阶梯建筑 海景 拍照", "city": "大理", "relevant": ["dl-lixiangbang"]}
+{"query": "丝绸 服饰 蚕桑", "city": "杭州", "relevant": ["hz-silk-museum"]}

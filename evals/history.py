@@ -1,4 +1,5 @@
 """评测历史与看板：把每次跑分变成可回溯的数据，而不是截图。"""
+
 from __future__ import annotations
 
 import json
@@ -65,7 +66,7 @@ def render_dashboard() -> str:
         rate = r["passed"] / r["cases"] if r["cases"] else 0
         avg_ms = round(r["total_ms"] / r["cases"]) if r["cases"] else 0
         lines.append(
-            f"| {r['ts']} | {r.get('prompt_version','-')} | {r['cases']} | {r['passed']} "
+            f"| {r['ts']} | {r.get('prompt_version', '-')} | {r['cases']} | {r['passed']} "
             f"| {rate:.0%} | {r['total_tokens']:,} | {avg_ms:,} ms |"
         )
 
@@ -84,11 +85,13 @@ def render_dashboard() -> str:
     latest = records[-1] if records else None
     lines += ["", "## 最近一次明细", ""]
     if latest:
-        lines.append(f"- 版本：{latest.get('prompt_version','-')} | 模型：{latest.get('model','-')}")
+        lines.append(f"- 版本：{latest.get('prompt_version', '-')} | 模型：{latest.get('model', '-')}")
         # summary 里 cases 是用例数量（int），明细在 details —— 之前误当成列表导致 TypeError
         for case in latest.get("details", []):
             mark = "✅" if case["passed"] else "❌"
-            lines.append(f"  - {mark} {case['request'][:28]}｜{case['tokens']:,} token｜{case['elapsed_ms']:,} ms")
+            lines.append(
+                f"  - {mark} {case['request'][:28]}｜{case['tokens']:,} token｜{case['elapsed_ms']:,} ms"
+            )
             for problem in case.get("problems", []):
                 lines.append(f"      - {problem}")
     else:

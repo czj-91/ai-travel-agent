@@ -8,13 +8,13 @@
    复核」——知识库不能当成静态真理。
 4. 输出裁剪：只回给模型决策需要的几个字段，控制进入上下文的 token。
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
 import os
 import re
-from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
@@ -43,18 +43,38 @@ load_dotenv(BASE_DIR / ".env")
 
 
 def _clip(text: str, limit: int) -> str:
-    return (text or '').strip()[:limit]
+    return (text or "").strip()[:limit]
 
 
 def record_text(row: dict) -> str:
     """拼出用于 embedding / 关键词匹配的检索文本。"""
-    parts = [row["name"], row["city"], row["category"], row["highlights"], row["booking"], row["closed_weekday"]]
+    parts = [
+        row["name"],
+        row["city"],
+        row["category"],
+        row["highlights"],
+        row["booking"],
+        row["closed_weekday"],
+    ]
     return " | ".join(p for p in parts if p)
 
 
 def _bigrams(text: str) -> set[str]:
     cleaned = re.sub(r"\s+", "", text or "")
     return {cleaned[i : i + 2] for i in range(len(cleaned) - 1)}
+
+
+def rrf_fuse(ranked_lists: list[list[str]], k: int, weight: float = 60.0) -> dict[str, float]:
+    """Reciprocal Rank Fusion：只按名次融合，不需要归一化两路分数。
+
+    向量余弦和 bigram 重合度量纲完全不同，硬加权求和要先调一堆系数；
+    RRF 只用名次，天然免调参，是混合检索的常规做法。
+    """
+    scores: dict[str, float] = {}
+    for ranked in ranked_lists:
+        for position, doc_id in enumerate(ranked, 1):
+            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (weight + position)
+    return dict(sorted(scores.items(), key=lambda item: item[1], reverse=True)[:k])
 
 
 def keyword_score(query: str, row: dict) -> float:
@@ -70,11 +90,11 @@ def keyword_score(query: str, row: dict) -> float:
 
 
 def _sqrt(x: float) -> float:
-    return x ** 0.5
+    return x**0.5
 
 
 def cosine(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     na, nb = _sqrt(sum(x * x for x in a)), _sqrt(sum(y * y for y in b))
     return dot / (na * nb) if na and nb else 0.0
 
@@ -89,13 +109,14 @@ def days_since(iso_date: str, today: str | None = None) -> int:
 
 
 class PoiIndex:
-    def __init__(self, ttl_days: int = DEFAULT_TTL_DAYS, use_embeddings: bool | None = None):
+    def __init__(
+        self, ttl_days: int = DEFAULT_TTL_DAYS, use_embeddings: bool | None = None, mode: str = "auto"
+    ):
         self.rows = [
-            json.loads(line)
-            for line in DATA_PATH.read_text(encoding="utf-8").splitlines()
-            if line.strip()
+            json.loads(line) for line in DATA_PATH.read_text(encoding="utf-8").splitlines() if line.strip()
         ]
         self.ttl_days = ttl_days
+        self.mode = mode
         self.vectors: dict[str, list[float]] = {}
         self._query_cache: dict[str, list[float]] = {}
         self.embed_backend = "keyword"
@@ -122,7 +143,7 @@ class PoiIndex:
         missing = [r for r in self.rows if self._key(record_text(r)) not in cache]
         if missing:
             vectors = self._embed([record_text(r) for r in missing])
-            for row, vec in zip(missing, vectors):
+            for row, vec in zip(missing, vectors, strict=False):
                 cache[self._key(record_text(row))] = vec
             CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
             CACHE_PATH.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
@@ -156,12 +177,19 @@ class PoiIndex:
         self._query_cache[query] = vector
         return vector
 
-    def search(self, query: str, city: str = "", top_k: int = 3, min_score: float | None = None) -> list[dict]:
+    def search(
+        self, query: str, city: str = "", top_k: int = 3, min_score: float | None = None
+    ) -> list[dict]:
+        """单路召回（embedding 或 keyword），行为与历史一致。"""
         """召回 POI。低于阈值的条目必须丢弃：把无关条目喂给模型，
         既污染上下文，又会让模型以为已经查到、从而不再调用 web_search。
         """
         qv = self._query_vector(query)
-        floor = min_score if min_score is not None else (MIN_SCORE_EMBEDDING if qv is not None else MIN_SCORE_KEYWORD)
+        floor = (
+            min_score
+            if min_score is not None
+            else (MIN_SCORE_EMBEDDING if qv is not None else MIN_SCORE_KEYWORD)
+        )
         hits: list[dict] = []
         for row in self.rows:
             if city and row["city"] != city:
@@ -176,6 +204,35 @@ class PoiIndex:
             hits.append({"row": row, "score": round(score, 4), "stale": age > self.ttl_days, "age_days": age})
         hits.sort(key=lambda h: h["score"], reverse=True)
         return hits[:top_k]
+
+    def search_hybrid(
+        self, query: str, city: str = "", top_k: int = 3, min_score: float | None = None
+    ) -> list[dict]:
+        """混合召回：向量与关键词各出一张榜单，再用 RRF 融合名次。
+
+        与 `search` 的区别不是「分数相加」，而是**只用名次**——两路分数量纲不可比，
+        硬加权会逼出一堆系数；RRF 免调参，也避免关键词命中一个词就压过语义结果。
+        """
+        floor = min_score if min_score is not None else MIN_SCORE_EMBEDDING
+        vector_hits = self.search(query, city=city, top_k=top_k * 3, min_score=floor)
+        keyword_hits = self.search(query, city=city, top_k=top_k * 3, min_score=MIN_SCORE_KEYWORD)
+        if not vector_hits and not keyword_hits:
+            return []
+
+        fused = rrf_fuse(
+            [[h["row"]["id"] for h in vector_hits], [h["row"]["id"] for h in keyword_hits]],
+            top_k,
+        )
+        by_id = {h["row"]["id"]: h for h in vector_hits + keyword_hits}
+        merged = []
+        for rank, doc_id in enumerate(fused, 1):
+            hit = dict(by_id[doc_id])
+            hit["score"] = round(fused[doc_id], 5)
+            hit["fused_rank"] = rank
+            hit["in_vector"] = doc_id in {h["row"]["id"] for h in vector_hits}
+            hit["in_keyword"] = doc_id in {h["row"]["id"] for h in keyword_hits}
+            merged.append(hit)
+        return merged
 
     def format_hits(self, hits: list[dict]) -> str:
         """工具输出直接进入模型上下文，必须紧凑：字段截断、一条一行、去掉冗余标签。"""
@@ -192,7 +249,9 @@ class PoiIndex:
                 f"｜{booking}｜{highlights}｜{r.get('source', '')}"
             )
             if h["stale"]:
-                lines.append(f"  ⚠ 核实于 {r.get('verified_at', '未知')}（{h['age_days']} 天前），可能过期，需 web_search 复核")
+                lines.append(
+                    f"  ⚠ 核实于 {r.get('verified_at', '未知')}（{h['age_days']} 天前），可能过期，需 web_search 复核"
+                )
         return "\n".join(lines) if lines else "本地 POI 库没有匹配结果。"
 
 

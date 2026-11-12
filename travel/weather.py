@@ -3,6 +3,7 @@
 天气直接影响行程可行性（雨天要室内备选、日出日落要看云量、高温要避午后），
 是「攻略检索」替代不了的实时数据，所以单独做成工具而不是让模型猜。
 """
+
 from __future__ import annotations
 
 import math
@@ -25,15 +26,32 @@ FORECAST_HORIZON_DAYS = 16
 
 # WMO 天气代码 -> 中文。只列行程里真正影响决策的部分。
 WEATHER_CODES = {
-    0: "晴", 1: "大体晴", 2: "局部多云", 3: "阴",
-    45: "雾", 48: "雾凇",
-    51: "毛毛雨(弱)", 53: "毛毛雨", 55: "毛毛雨(强)",
-    61: "小雨", 63: "中雨", 65: "大雨",
-    66: "冻雨", 67: "强冻雨",
-    71: "小雪", 73: "中雪", 75: "大雪", 77: "雪粒",
-    80: "阵雨", 81: "强阵雨", 82: "暴阵雨",
-    85: "阵雪", 86: "强阵雪",
-    95: "雷暴", 96: "雷暴伴冰雹", 99: "强雷暴伴冰雹",
+    0: "晴",
+    1: "大体晴",
+    2: "局部多云",
+    3: "阴",
+    45: "雾",
+    48: "雾凇",
+    51: "毛毛雨(弱)",
+    53: "毛毛雨",
+    55: "毛毛雨(强)",
+    61: "小雨",
+    63: "中雨",
+    65: "大雨",
+    66: "冻雨",
+    67: "强冻雨",
+    71: "小雪",
+    73: "中雪",
+    75: "大雪",
+    77: "雪粒",
+    80: "阵雨",
+    81: "强阵雨",
+    82: "暴阵雨",
+    85: "阵雪",
+    86: "强阵雪",
+    95: "雷暴",
+    96: "雷暴伴冰雹",
+    99: "强雷暴伴冰雹",
 }
 RAINY = {51, 53, 55, 61, 63, 65, 66, 67, 71, 73, 75, 77, 80, 81, 82, 85, 86, 95, 96, 99}
 SNOWY = {71, 73, 75, 77, 85, 86}
@@ -42,33 +60,102 @@ SNOWY = {71, 73, 75, 77, 85, 86}
 # 的两个村庄，用「大阪」检索直接 0 条。常用境外目的地给一份拉丁名兜底——用拉丁名检索、
 # language=zh 返回的 country 仍是中文，可以和 country 参数对齐。
 LATIN_ALIASES = {
-    "东京": "Tokyo", "大阪": "Osaka", "京都": "Kyoto", "名古屋": "Nagoya", "札幌": "Sapporo",
-    "福冈": "Fukuoka", "奈良": "Nara", "横滨": "Yokohama", "冲绳": "Okinawa", "那霸": "Naha",
-    "首尔": "Seoul", "釜山": "Busan", "济州": "Jeju City",
-    "曼谷": "Bangkok", "清迈": "Chiang Mai", "普吉": "Phuket", "暹粒": "Siem Reap",
-    "新加坡": "Singapore", "吉隆坡": "Kuala Lumpur", "亚庇": "Kota Kinabalu", "巴厘岛": "Bali",
-    "雅加达": "Jakarta", "马尼拉": "Manila", "宿务": "Cebu", "河内": "Hanoi",
-    "胡志明": "Ho Chi Minh City", "岘港": "Da Nang",
-    "巴黎": "Paris", "伦敦": "London", "罗马": "Rome", "米兰": "Milan", "威尼斯": "Venice",
-    "佛罗伦萨": "Florence", "巴塞罗那": "Barcelona", "马德里": "Madrid", "塞维利亚": "Seville",
-    "柏林": "Berlin", "慕尼黑": "Munich", "法兰克福": "Frankfurt", "阿姆斯特丹": "Amsterdam",
-    "布鲁塞尔": "Brussels", "苏黎世": "Zurich", "日内瓦": "Geneva", "维也纳": "Vienna",
-    "萨尔茨堡": "Salzburg", "布拉格": "Prague", "布达佩斯": "Budapest", "华沙": "Warsaw",
-    "哥本哈根": "Copenhagen", "斯德哥尔摩": "Stockholm", "奥斯陆": "Oslo", "赫尔辛基": "Helsinki",
-    "雷克雅未克": "Reykjavik", "都柏林": "Dublin", "爱丁堡": "Edinburgh", "雅典": "Athens",
-    "里斯本": "Lisbon", "伊斯坦布尔": "Istanbul", "莫斯科": "Moscow", "圣彼得堡": "Saint Petersburg",
-    "开罗": "Cairo", "马拉喀什": "Marrakesh", "开普敦": "Cape Town", "迪拜": "Dubai",
-    "阿布扎比": "Abu Dhabi", "多哈": "Doha", "纽约": "New York", "波士顿": "Boston",
-    "华盛顿": "Washington", "芝加哥": "Chicago", "洛杉矶": "Los Angeles", "旧金山": "San Francisco",
-    "拉斯维加斯": "Las Vegas", "西雅图": "Seattle", "温哥华": "Vancouver", "多伦多": "Toronto",
-    "墨西哥城": "Mexico City", "坎昆": "Cancun", "里约": "Rio de Janeiro", "悉尼": "Sydney",
-    "墨尔本": "Melbourne", "奥克兰": "Auckland", "皇后镇": "Queenstown", "檀香山": "Honolulu",
+    "东京": "Tokyo",
+    "大阪": "Osaka",
+    "京都": "Kyoto",
+    "名古屋": "Nagoya",
+    "札幌": "Sapporo",
+    "福冈": "Fukuoka",
+    "奈良": "Nara",
+    "横滨": "Yokohama",
+    "冲绳": "Okinawa",
+    "那霸": "Naha",
+    "首尔": "Seoul",
+    "釜山": "Busan",
+    "济州": "Jeju City",
+    "曼谷": "Bangkok",
+    "清迈": "Chiang Mai",
+    "普吉": "Phuket",
+    "暹粒": "Siem Reap",
+    "新加坡": "Singapore",
+    "吉隆坡": "Kuala Lumpur",
+    "亚庇": "Kota Kinabalu",
+    "巴厘岛": "Bali",
+    "雅加达": "Jakarta",
+    "马尼拉": "Manila",
+    "宿务": "Cebu",
+    "河内": "Hanoi",
+    "胡志明": "Ho Chi Minh City",
+    "岘港": "Da Nang",
+    "巴黎": "Paris",
+    "伦敦": "London",
+    "罗马": "Rome",
+    "米兰": "Milan",
+    "威尼斯": "Venice",
+    "佛罗伦萨": "Florence",
+    "巴塞罗那": "Barcelona",
+    "马德里": "Madrid",
+    "塞维利亚": "Seville",
+    "柏林": "Berlin",
+    "慕尼黑": "Munich",
+    "法兰克福": "Frankfurt",
+    "阿姆斯特丹": "Amsterdam",
+    "布鲁塞尔": "Brussels",
+    "苏黎世": "Zurich",
+    "日内瓦": "Geneva",
+    "维也纳": "Vienna",
+    "萨尔茨堡": "Salzburg",
+    "布拉格": "Prague",
+    "布达佩斯": "Budapest",
+    "华沙": "Warsaw",
+    "哥本哈根": "Copenhagen",
+    "斯德哥尔摩": "Stockholm",
+    "奥斯陆": "Oslo",
+    "赫尔辛基": "Helsinki",
+    "雷克雅未克": "Reykjavik",
+    "都柏林": "Dublin",
+    "爱丁堡": "Edinburgh",
+    "雅典": "Athens",
+    "里斯本": "Lisbon",
+    "伊斯坦布尔": "Istanbul",
+    "莫斯科": "Moscow",
+    "圣彼得堡": "Saint Petersburg",
+    "开罗": "Cairo",
+    "马拉喀什": "Marrakesh",
+    "开普敦": "Cape Town",
+    "迪拜": "Dubai",
+    "阿布扎比": "Abu Dhabi",
+    "多哈": "Doha",
+    "纽约": "New York",
+    "波士顿": "Boston",
+    "华盛顿": "Washington",
+    "芝加哥": "Chicago",
+    "洛杉矶": "Los Angeles",
+    "旧金山": "San Francisco",
+    "拉斯维加斯": "Las Vegas",
+    "西雅图": "Seattle",
+    "温哥华": "Vancouver",
+    "多伦多": "Toronto",
+    "墨西哥城": "Mexico City",
+    "坎昆": "Cancun",
+    "里约": "Rio de Janeiro",
+    "悉尼": "Sydney",
+    "墨尔本": "Melbourne",
+    "奥克兰": "Auckland",
+    "皇后镇": "Queenstown",
+    "檀香山": "Honolulu",
 }
 
 # 行政级别权重：级别越高越像「用户想问的那个城市」。PPL=普通居民点，PPLC=首都，PPLA*=首府。
 FEATURE_WEIGHT = {
-    "PPLC": 40.0, "LCC": 35.0, "PPLA": 30.0, "PPLA2": 24.0,
-    "PPLA3": 20.0, "PPLA4": 16.0, "PPL": 10.0, "PPLX": 8.0,
+    "PPLC": 40.0,
+    "LCC": 35.0,
+    "PPLA": 30.0,
+    "PPLA2": 24.0,
+    "PPLA3": 20.0,
+    "PPLA4": 16.0,
+    "PPL": 10.0,
+    "PPLX": 8.0,
 }
 UNKNOWN_WEIGHT = 5.0
 COUNTRY_MATCH_BONUS = 50.0
@@ -88,7 +175,9 @@ def is_rainy(code: int) -> bool:
 
 def place_label(result: dict) -> str:
     """给模型看的地名「城市，省州，国家」：只回城市名的话，它分不清江苏的东京和日本东京。"""
-    return "，".join(str(part) for part in (result.get("name"), result.get("admin1"), result.get("country")) if part)
+    return "，".join(
+        str(part) for part in (result.get("name"), result.get("admin1"), result.get("country")) if part
+    )
 
 
 def score_result(result: dict, country: str = "") -> float:
@@ -99,7 +188,10 @@ def score_result(result: dict, country: str = "") -> float:
         score += math.log10(population) * 2.0
     if country:
         hint = country.strip().lower()
-        located = {str(result.get("country") or "").strip().lower(), str(result.get("country_code") or "").strip().lower()}
+        located = {
+            str(result.get("country") or "").strip().lower(),
+            str(result.get("country_code") or "").strip().lower(),
+        }
         score += COUNTRY_MATCH_BONUS if hint in located else -COUNTRY_MISMATCH_PENALTY
     return round(score, 2)
 
@@ -144,12 +236,16 @@ def geocode(city: str, country: str = "") -> dict:
 
     candidates: list[dict] = []
     for term in query_variants(key[0]):
-        payload = _get_json(GEOCODE_URL, {"name": term, "count": GEOCODE_LIMIT, "language": "zh", "format": "json"})
+        payload = _get_json(
+            GEOCODE_URL, {"name": term, "count": GEOCODE_LIMIT, "language": "zh", "format": "json"}
+        )
         candidates.extend(payload.get("results") or [])
 
     best = pick_result(candidates, country=key[1])
     if best is None:
-        raise LookupError(f"找不到城市：{city}。可改用英文城市名，或带上 country 参数（例如 country=\"日本\"）。")
+        raise LookupError(
+            f'找不到城市：{city}。可改用英文城市名，或带上 country 参数（例如 country="日本"）。'
+        )
 
     located = {
         "latitude": float(best["latitude"]),
@@ -181,7 +277,10 @@ def forecast_window(start_date: str | None, days: int, today: date | None = None
     try:
         first = date.fromisoformat(text)
     except ValueError:
-        return fallback, f"出发日期「{text}」没法识别，已改为未来 {span} 天天气；请按季节常识安排并提醒用户临行前再查。"
+        return (
+            fallback,
+            f"出发日期「{text}」没法识别，已改为未来 {span} 天天气；请按季节常识安排并提醒用户临行前再查。",
+        )
     if first < base:
         return fallback, f"{first:%Y-%m-%d} 已经过去了，下面给的是未来 {span} 天天气，不要写进这天的行程。"
     if first > horizon:
@@ -253,7 +352,7 @@ def format_forecast(rows: list[dict]) -> str:
     hint = f"未来 {len(rows)} 天中 {rainy_days} 天有降水"
     if any(r["rainy"] for r in rows):
         hint += "，建议为雨天准备博物馆/室内景点备选，并把日出日落拍摄安排在无雨日"
-    return "\n".join([head] + lines + [hint])
+    return "\n".join([head, *lines, hint])
 
 
 def build_weather_tool(days: int = 4):
@@ -272,9 +371,9 @@ def build_weather_tool(days: int = 4):
         """
         try:
             return wrap_untrusted(
-            format_forecast(fetch_forecast(city, days=days, country=country, start_date=start_date)),
-            "open-meteo",
-        )
+                format_forecast(fetch_forecast(city, days=days, country=country, start_date=start_date)),
+                "open-meteo",
+            )
         except Exception as exc:
             return f"天气查询失败：{type(exc).__name__}: {str(exc)[:120]}。请改用 web_search 查询当地天气。"
 

@@ -5,6 +5,7 @@
 
 结论写进 reports/dashboard.md 的趋势表，避免「感觉 v2 更好」这种没有数据的判断。
 """
+
 from __future__ import annotations
 
 import os
@@ -12,13 +13,16 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from evals.run_eval import load_cases, run_cases  # noqa: E402
+from evals.run_eval import load_cases, run_cases
 
 
 def main(argv: list[str]) -> int:
     limit = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else 3
     record = "--record" in argv
-    versions = [v.strip() for v in (argv[argv.index("--versions") + 1].split(",") if "--versions" in argv else ["v1", "v2"])]
+    versions = [
+        v.strip()
+        for v in (argv[argv.index("--versions") + 1].split(",") if "--versions" in argv else ["v1", "v2"])
+    ]
 
     cases = load_cases(limit)
     results = []
@@ -52,13 +56,15 @@ def main(argv: list[str]) -> int:
                 print(f"  结论：质量持平、成本下降 {abs(d_tok):.0%}，采用新版。")
             else:
                 print("  结论：质量与成本都没有优势，保留旧版。")
-        print("  注意：样本量小（每版 " + str(results[0][4]["cases"]) + " 条）时通过率差异可能来自模型随机性，"
-              "重要决策请扩样到 10+ 条并重复 2 轮。")
+        print(
+            "  注意：样本量小（每版 " + str(results[0][4]["cases"]) + " 条）时通过率差异可能来自模型随机性，"
+            "重要决策请扩样到 10+ 条并重复 2 轮。"
+        )
 
     if record:
-        from evals.history import append_record, render_dashboard  # noqa: E402
+        from evals.history import append_record, render_dashboard
 
-        for version, _, _, _, summary in results:
+        for _version, _, _, _, summary in results:
             append_record(summary)
         render_dashboard()
         print("已写入看板数据")

@@ -1,4 +1,5 @@
 """工具层：把第三方搜索客户端封装成可控、可测、能降级兜底的 @tool。"""
+
 from __future__ import annotations
 
 import time

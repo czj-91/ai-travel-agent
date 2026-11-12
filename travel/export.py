@@ -3,6 +3,7 @@ r"""行程导出：把 TripPlan 变成能带走的东西（终端文本 / Markdo
 只用标准库，不联网、不调模型，因此全部可以离线单测。ics 走 RFC 5545：
 每行 ≤75 字节（中文按字节折行，不能切断字符）、文本值里的 , ; \ 与换行必须转义。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -33,7 +34,9 @@ def resolve_start_date(start_date: str | date | None, today: date | None = None)
     return base + timedelta(days=1), True
 
 
-def day_schedule(spots: list[Spot], start: datetime, lunch_at_hour: int = LUNCH_AT_HOUR, lunch_minutes: int = LUNCH_MINUTES):
+def day_schedule(
+    spots: list[Spot], start: datetime, lunch_at_hour: int = LUNCH_AT_HOUR, lunch_minutes: int = LUNCH_MINUTES
+):
     """按停留时长顺排时段，到点插一次午休。纯函数，输出 (开始, 结束, spot) 列表。"""
     clock = start
     lunch_taken = False
@@ -49,7 +52,9 @@ def day_schedule(spots: list[Spot], start: datetime, lunch_at_hour: int = LUNCH_
 
 
 def _start_of_day(start_date: date, day_number: int) -> datetime:
-    return datetime(start_date.year, start_date.month, start_date.day, *DAY_START) + timedelta(days=max(day_number, 1) - 1)
+    return datetime(start_date.year, start_date.month, start_date.day, *DAY_START) + timedelta(
+        days=max(day_number, 1) - 1
+    )
 
 
 def _ticket(spot: Spot) -> str:
@@ -92,7 +97,9 @@ def to_text(report: TripPlan, start_date: str | date | None = None) -> str:
             head = f"第 {day.day} 天 {dated} · {day.theme}（{day.base_area}，约 {_day_minutes(day) / 60:.1f} 小时，{day.day_cost_yuan:.0f} 元/人）"
         lines.append(head)
         for index, (begin, end, spot) in enumerate(day_schedule(day.spots, _start_of_day(when, day.day)), 1):
-            lines.append(f"   {index}. {begin:%H:%M}–{end:%H:%M} {spot.name}（{spot.minutes} 分钟 / {_ticket(spot)}）—— {spot.why}")
+            lines.append(
+                f"   {index}. {begin:%H:%M}–{end:%H:%M} {spot.name}（{spot.minutes} 分钟 / {_ticket(spot)}）—— {spot.why}"
+            )
         if day.meals:
             lines.append(f"   吃：{'；'.join(day.meals)}")
         lines.append(f"   行：{day.transport}")
@@ -179,7 +186,9 @@ def to_ics(report: TripPlan, start_date: str | date | None = None, stamp: str | 
     events = 0
     for day in report.plan:
         for index, (begin, end, spot) in enumerate(day_schedule(day.spots, _start_of_day(when, day.day)), 1):
-            digest = hashlib.sha1(f"{report.destination}|{day.day}|{index}|{spot.name}".encode("utf-8")).hexdigest()[:16]
+            digest = hashlib.sha1(f"{report.destination}|{day.day}|{index}|{spot.name}".encode()).hexdigest()[
+                :16
+            ]
             description = (
                 f"{spot.why}\n第 {day.day} 天 · {day.theme}｜{day.base_area}\n"
                 f"门票：{_ticket(spot)}｜当天人均 {day.day_cost_yuan:.0f} 元\n通勤：{day.transport}"

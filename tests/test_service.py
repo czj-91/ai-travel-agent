@@ -1,7 +1,8 @@
 """服务层测试：用 TestClient 直接打接口，不需要真的起 uvicorn。
 
-    python tests/test_service.py
+python tests/test_service.py
 """
+
 from __future__ import annotations
 
 import os
@@ -10,10 +11,10 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from fastapi.testclient import TestClient  # noqa: E402
+from fastapi.testclient import TestClient
 
-import service  # noqa: E402
-from travel.schemas import DayPlan, Spot, TripPlan  # noqa: E402
+import service
+from travel.schemas import DayPlan, Spot, TripPlan
 
 
 def _sample_plan() -> TripPlan:
@@ -63,9 +64,7 @@ def _use_fake_agent(structured=_sample_plan(), model="deepseek-chat"):
     service.reset_rate_limiter()
 
 
-PNG_DATA_URL = (
-    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="
-)
+PNG_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="
 
 
 def test_health_ok_with_fake_env():
@@ -118,6 +117,7 @@ def test_plan_502_when_model_ignores_schema():
     assert resp.status_code == 502
     assert "schema" in resp.json()["detail"]
 
+
 def test_plan_requires_token_when_configured():
     saved = os.environ.get("SERVICE_TOKEN")
     os.environ["SERVICE_TOKEN"] = "secret-abc"
@@ -152,9 +152,17 @@ def test_export_flags_a_guessed_start_date():
 
 def test_export_rejects_bad_payloads():
     assert client.post("/export", json={"plan": {"foo": 1}}).status_code == 422
-    assert client.post("/export", json={"plan": _sample_plan().model_dump(), "formats": ["pdf"]}).status_code == 422
-    assert client.post("/export", json={"plan": _sample_plan().model_dump(), "formats": []}).status_code == 422
-    assert client.post("/export", json={"plan": _sample_plan().model_dump(), "start_date": "下周"}).status_code == 422
+    assert (
+        client.post("/export", json={"plan": _sample_plan().model_dump(), "formats": ["pdf"]}).status_code
+        == 422
+    )
+    assert (
+        client.post("/export", json={"plan": _sample_plan().model_dump(), "formats": []}).status_code == 422
+    )
+    assert (
+        client.post("/export", json={"plan": _sample_plan().model_dump(), "start_date": "下周"}).status_code
+        == 422
+    )
 
 
 def test_index_page_is_served():
@@ -165,7 +173,9 @@ def test_index_page_is_served():
     assert "/static/app.css" in resp.text and "/static/app.js" in resp.text
     import re
 
-    assert not re.search(r'<(?:script|link)[^>]+(?:src|href)="https?://', resp.text), "引入了外部 CDN，断网就打不开"
+    assert not re.search(r'<(?:script|link)[^>]+(?:src|href)="https?://', resp.text), (
+        "引入了外部 CDN，断网就打不开"
+    )
     for asset in ("/static/app.css", "/static/app.js"):
         got = client.get(asset)
         assert got.status_code == 200 and len(got.text) > 400, asset
@@ -182,7 +192,9 @@ def test_plan_rejects_blank_request_but_strips_the_useful_one():
 
     _use_fake_agent()
     service._graph = _Recorder()
-    assert client.post("/plan", json={"request": "   "}).status_code == 422, "两个空格曾能绕过 min_length 直接进模型"
+    assert client.post("/plan", json={"request": "   "}).status_code == 422, (
+        "两个空格曾能绕过 min_length 直接进模型"
+    )
     resp = client.post("/plan", json={"request": "  杭州 1天  "})
     assert resp.status_code == 200, resp.text
     assert captured["text"] == "杭州 1天", "首尾空白不该原样送进模型"
@@ -216,7 +228,12 @@ def test_plan_rejects_image_on_text_model_with_readable_error():
 
 def test_plan_rejects_unusable_image_payloads():
     _use_fake_agent(model="qwen3.5-plus")
-    assert client.post("/plan", json={"request": "看图", "image": "data:image/png;base64,@@not base64@@"}).status_code == 422
+    assert (
+        client.post(
+            "/plan", json={"request": "看图", "image": "data:image/png;base64,@@not base64@@"}
+        ).status_code
+        == 422
+    )
     too_small = client.post("/plan", json={"request": "看图", "image": "data:text/plain;base64,aGVsbG8="})
     assert too_small.status_code == 422 and "不支持的图片格式" in too_small.json()["detail"], too_small.text
 
@@ -253,7 +270,9 @@ class _FakeStreamGraph:
         from types import SimpleNamespace
 
         return {
-            "messages": [SimpleNamespace(usage_metadata={"input_tokens": 500, "output_tokens": 90}, content="x")],
+            "messages": [
+                SimpleNamespace(usage_metadata={"input_tokens": 500, "output_tokens": 90}, content="x")
+            ],
             "structured_response": _sample_plan(),
         }
 
@@ -298,7 +317,9 @@ def test_plan_stream_rejects_blank_request():
 
 def test_cors_blocks_unlisted_origin():
     _use_fake_agent()
-    bad = client.options("/plan", headers={"Origin": "http://evil.example", "Access-Control-Request-Method": "POST"})
+    bad = client.options(
+        "/plan", headers={"Origin": "http://evil.example", "Access-Control-Request-Method": "POST"}
+    )
     assert "access-control-allow-origin" not in {k.lower() for k in bad.headers}
 
 

@@ -1,4 +1,5 @@
 """运行时配置：缺 key 立刻报错，绝不静默回退到别的默认端点。"""
+
 from __future__ import annotations
 
 import os

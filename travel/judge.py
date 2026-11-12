@@ -6,6 +6,7 @@
 2. 只做**相对比较**和趋势监控，不把它当唯一结论；
 3. 汇总逻辑是纯函数，可以离线单测。
 """
+
 from __future__ import annotations
 
 from collections import Counter
@@ -28,7 +29,9 @@ class DimensionScore(BaseModel):
 
 class JudgeVerdict(BaseModel):
     dimensions: list[DimensionScore] = Field(description="五个维度各自的评分")
-    blocking_issues: list[str] = Field(default_factory=list, description="会让行程无法执行的硬问题，没有就留空")
+    blocking_issues: list[str] = Field(
+        default_factory=list, description="会让行程无法执行的硬问题，没有就留空"
+    )
     overall: int = Field(ge=1, le=5, description="综合分")
 
 
@@ -132,7 +135,5 @@ def fact_check_vs_kb(plan, index, tolerance: float = 1.0) -> list[str]:
         if _name_similarity(spot.name, ref["name"]) < MIN_NAME_SIMILARITY:
             continue
         if abs(float(spot.ticket_yuan) - float(ref["ticket_yuan"])) > tolerance:
-            mismatches.append(
-                f"{spot.name}：行程写 {spot.ticket_yuan} 元，知识库写 {ref['ticket_yuan']} 元"
-            )
+            mismatches.append(f"{spot.name}：行程写 {spot.ticket_yuan} 元，知识库写 {ref['ticket_yuan']} 元")
     return mismatches

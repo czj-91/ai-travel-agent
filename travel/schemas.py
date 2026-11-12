@@ -1,4 +1,5 @@
 """结构化输出契约：旅行计划的 schema。"""
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field

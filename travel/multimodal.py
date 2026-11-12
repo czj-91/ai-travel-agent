@@ -1,9 +1,10 @@
 """多模态输入：把本地图片编码成 LangChain 标准 image content block。"""
+
 from __future__ import annotations
 
 import base64
-import re
 import mimetypes
+import re
 from pathlib import Path
 
 MAX_BYTES = 8 * 1024 * 1024  # 单图上限，超过直接拒绝，避免上下文爆炸

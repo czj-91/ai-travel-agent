@@ -2,28 +2,25 @@
 # 主实现见 ../travel/。保留在此仅作演进记录。
 # 注意本文件里的 base_url=os.getenv(...) 未做校验：留空会让 OpenAI SDK 静默回退到
 # api.openai.com，travel/config.py 已修复该问题并加了单测。
-from langchain.chat_models import init_chat_model
-from langchain_tavily import TavilySearch
-from langchain.agents import create_agent
 import os
 
 # 1.加载环境变量
 from dotenv import load_dotenv
+from langchain.agents import create_agent
+from langchain.chat_models import init_chat_model
+from langchain_tavily import TavilySearch
 
 load_dotenv()
 
 # 2.使用tavily作为web搜索工具
-web_search = TavilySearch(
-    max_results=5,
-    topic="general"
-)
+web_search = TavilySearch(max_results=5, topic="general")
 
 # 3.多模态模型
 model = init_chat_model(
     model="qwen3.5-plus",  # 这是一个支持图片、文本、视频多模态的模型
     model_provider="openai",
     base_url=os.getenv("DASHSCOPE_BASE_URL"),
-    api_key=os.getenv("DASHSCOPE_API_KEY")
+    api_key=os.getenv("DASHSCOPE_API_KEY"),
 )
 
 # 4.系统提示词
@@ -39,9 +36,9 @@ system_prompt = """
 
 # 5.创建Agent
 agent = create_agent(
-    model=model,                   # 模型
-    tools=[web_search],            # 工具
-    system_prompt=system_prompt    # 系统提示词
+    model=model,  # 模型
+    tools=[web_search],  # 工具
+    system_prompt=system_prompt,  # 系统提示词
 )
 
 # 6.本地部署：uv add langgraph-cli[inmem]，新增 langgraph.json，

@@ -2,6 +2,7 @@
 
 langgraph dev / Studio 挂载的就是本模块里的 agent 对象。
 """
+
 from __future__ import annotations
 
 import json
@@ -10,19 +11,20 @@ import threading
 import uuid
 
 from langchain.agents import create_agent
-from langchain_core.messages import AIMessageChunk as _AIMessageChunk, ToolMessage as _ToolMessage
 from langchain.agents.middleware import SummarizationMiddleware
 from langchain.chat_models import init_chat_model
+from langchain_core.messages import AIMessageChunk as _AIMessageChunk
+from langchain_core.messages import ToolMessage as _ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from .config import Settings, load_settings
-from .observability import RunStats, Timer, usage_from_messages
 from .multimodal import build_content, check_image_model
+from .observability import Timer, usage_from_messages
 from .prompts import get_prompt
-from .schemas import DayPlan, Spot, TripPlan
 from .rag import PoiIndex, build_poi_tool
+from .schemas import DayPlan, Spot, TripPlan
 from .tools import build_search_tool
 from .weather import build_weather_tool
 
@@ -67,7 +69,12 @@ def _build_checkpointer(settings: Settings, persist: bool):
         return saved
 
 
-def build_agent(persist: bool = True, settings: Settings | None = None, prompt_version: str | None = None, platform_persistence: bool = False):
+def build_agent(
+    persist: bool = True,
+    settings: Settings | None = None,
+    prompt_version: str | None = None,
+    platform_persistence: bool = False,
+):
     """返回 (graph, settings)。persist=True 时用 SQLite 保存会话状态。
 
     platform_persistence=True 时**完全不传 checkpointer**：langgraph dev / LangSmith
@@ -126,6 +133,7 @@ def _first_json_object(text: str) -> str | None:
                 return text[start : index + 1]
     return None
 
+
 def _message_count(graph, config) -> int:
     """取当前 thread 已有的消息条数，用于把统计范围限制在本轮。"""
     try:
@@ -133,6 +141,7 @@ def _message_count(graph, config) -> int:
     except Exception:
         return 0
     return len((getattr(state, "values", None) or {}).get("messages") or [])
+
 
 def parse_structured_from_text(messages) -> TripPlan | None:
     """兜底：模型有时把结果写在文本里而没有调用结构化工具。
@@ -147,7 +156,9 @@ def parse_structured_from_text(messages) -> TripPlan | None:
         if content is None and isinstance(message, dict):
             content = message.get("content")
         if isinstance(content, list):
-            content = "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in content)
+            content = "".join(
+                part.get("text", "") if isinstance(part, dict) else str(part) for part in content
+            )
         if not isinstance(content, str):
             continue
         candidate = _first_json_object(content)
@@ -160,8 +171,14 @@ def parse_structured_from_text(messages) -> TripPlan | None:
     return None
 
 
-def plan_trip(graph, settings: Settings, request: str, session_id: str | None = None,
-              image_path: str | None = None, image_block: dict | None = None):
+def plan_trip(
+    graph,
+    settings: Settings,
+    request: str,
+    session_id: str | None = None,
+    image_path: str | None = None,
+    image_block: dict | None = None,
+):
     """跑一次规划，返回 (TripPlan, RunStats, thread_id)。同一 session_id 会延续记忆。
 
     带图片时必须用多模态模型（qwen-vl / qwen3.5-plus 这类），否则直接拒绝，
@@ -182,10 +199,16 @@ def plan_trip(graph, settings: Settings, request: str, session_id: str | None = 
         report = result.get("structured_response") or parse_structured_from_text(result.get("messages", []))
         if report is None:
             result = graph.invoke(
-                {"messages": [("user", "请按 schema 输出最终结果，必须调用 TripPlan 结构化工具，不要只回文本。")]},
+                {
+                    "messages": [
+                        ("user", "请按 schema 输出最终结果，必须调用 TripPlan 结构化工具，不要只回文本。")
+                    ]
+                },
                 config,
             )
-            report = result.get("structured_response") or parse_structured_from_text(result.get("messages", []))
+            report = result.get("structured_response") or parse_structured_from_text(
+                result.get("messages", [])
+            )
     # 只统计本轮新增的消息：整个 thread 历史都算会把多轮会话的成本虚报成单次成本
     stats = usage_from_messages({"messages": (result.get("messages") or [])[before:]})
     stats.elapsed_ms = timer.elapsed_ms
@@ -211,17 +234,27 @@ def stream_plan(graph, settings, request: str, session_id: str | None = None, im
     with Timer() as timer:
         yield {"type": "start", "session_id": thread}
         for chunk, meta in graph.stream({"messages": [("user", content)]}, config, stream_mode="messages"):
-            name = getattr(chunk, "name", None) or (meta.get("ls_agent_type") if isinstance(meta, dict) else None)
+            name = getattr(chunk, "name", None) or (
+                meta.get("ls_agent_type") if isinstance(meta, dict) else None
+            )
             if isinstance(chunk, _ToolMessage):
-                yield {"type": "tool_result", "name": name, "preview": str(getattr(chunk, "content", ""))[:160]}
+                yield {
+                    "type": "tool_result",
+                    "name": name,
+                    "preview": str(getattr(chunk, "content", ""))[:160],
+                }
             elif isinstance(chunk, _AIMessageChunk):
-                for call in (getattr(chunk, "tool_call_chunks", None) or getattr(chunk, "tool_calls", None) or []):
+                for call in (
+                    getattr(chunk, "tool_call_chunks", None) or getattr(chunk, "tool_calls", None) or []
+                ):
                     call_name = call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
                     if call_name:
                         yield {"type": "tool_call", "name": call_name}
                 text = getattr(chunk, "content", "")
                 if isinstance(text, list):
-                    text = "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in text)
+                    text = "".join(
+                        part.get("text", "") if isinstance(part, dict) else str(part) for part in text
+                    )
                 if text:
                     yield {"type": "token", "text": str(text)}
 
@@ -230,7 +263,11 @@ def stream_plan(graph, settings, request: str, session_id: str | None = None, im
         report = (result or {}).get("structured_response") or parse_structured_from_text(messages)
         if report is None:
             graph.invoke(
-                {"messages": [("user", "请按 schema 输出最终结果，必须调用 TripPlan 结构化工具，不要只回文本。")]},
+                {
+                    "messages": [
+                        ("user", "请按 schema 输出最终结果，必须调用 TripPlan 结构化工具，不要只回文本。")
+                    ]
+                },
                 config,
             )
             result = graph.invoke(None, config)

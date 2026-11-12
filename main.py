@@ -6,13 +6,13 @@
     python main.py --image 截图.png 这个景点值得去吗  # 需 TRAVEL_MODEL=qwen3.5-plus
     python main.py --export md,ics --start 2026-12-01 大理 4天 自驾
 """
+
 from __future__ import annotations
 
 import sys
 
 from travel.export import FORMATS, render, write_exports
 from travel.graph import build_agent, plan_trip
-
 
 OPTIONS = {
     "--session": "session",
@@ -81,7 +81,9 @@ def main(argv: list[str]) -> int:
         return 1
 
     graph, settings = build_agent()
-    print(f"模型={settings.travel_model} | 工具=poi_lookup / weather_forecast / web_search | LangSmith project={settings.langsmith_project}")
+    print(
+        f"模型={settings.travel_model} | 工具=poi_lookup / weather_forecast / web_search | LangSmith project={settings.langsmith_project}"
+    )
     print(f"需求：{request}\n正在检索攻略并编排行程，请稍候…\n")
 
     try:

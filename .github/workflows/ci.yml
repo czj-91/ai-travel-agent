@@ -34,3 +34,14 @@ jobs:
             echo "镜像里出现了 .env，构建失败" && exit 1
           fi
           echo "镜像内无 .env"
+
+  lint:
+    name: 代码检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: ruff check
+        run: uvx ruff@0.17.4 check .
+      - name: ruff format 一致性检查
+        run: uvx ruff@0.17.4 format --check .

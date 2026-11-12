@@ -17,6 +17,7 @@
     默认只监听 127.0.0.1。若要对外提供，请在 .env 设置 SERVICE_TOKEN，
     客户端必须带请求头 X-Service-Token，否则 401。
 """
+
 from __future__ import annotations
 
 import json
@@ -136,7 +137,9 @@ class PlanResponse(BaseModel):
 class ExportRequest(BaseModel):
     plan: dict = Field(description="/plan 返回的 plan 原文（TripPlan JSON）")
     start_date: str | None = Field(default=None, description="YYYY-MM-DD 出发日期；不填按明天并标注为推测")
-    formats: list[str] = Field(default_factory=lambda: ["markdown", "ics"], description="markdown / ics / txt")
+    formats: list[str] = Field(
+        default_factory=lambda: ["markdown", "ics"], description="markdown / ics / txt"
+    )
 
 
 class ExportedFile(BaseModel):
@@ -168,7 +171,9 @@ def index():
     return FileResponse(INDEX_PATH, media_type="text/html")
 
 
-@app.post("/export", response_model=ExportResponse, dependencies=[Depends(require_token), Depends(limit_requests)])
+@app.post(
+    "/export", response_model=ExportResponse, dependencies=[Depends(require_token), Depends(limit_requests)]
+)
 def export(payload: ExportRequest):
     if not payload.formats:
         raise HTTPException(status_code=422, detail="formats 不能为空")
@@ -197,7 +202,9 @@ def export(payload: ExportRequest):
     )
 
 
-@app.post("/plan", response_model=PlanResponse, dependencies=[Depends(require_token), Depends(limit_requests)])
+@app.post(
+    "/plan", response_model=PlanResponse, dependencies=[Depends(require_token), Depends(limit_requests)]
+)
 def plan(payload: PlanRequest):
     try:
         graph, settings = get_agent()
@@ -217,7 +224,9 @@ def plan(payload: PlanRequest):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
-        report, stats, thread = plan_trip(graph, settings, payload.request, payload.session_id, image_block=image_block)
+        report, stats, thread = plan_trip(
+            graph, settings, payload.request, payload.session_id, image_block=image_block
+        )
     except Exception as exc:
         # 不把内部异常原文透给调用方，只给类型与截断信息，完整堆栈留在服务端日志
         raise HTTPException(status_code=500, detail=f"规划失败：{type(exc).__name__}") from exc

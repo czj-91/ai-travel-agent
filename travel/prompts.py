@@ -2,6 +2,7 @@
 
 用环境变量 PROMPT_VERSION 选择（默认 v2）。
 """
+
 import os
 
 _COMMON_TAIL = """

@@ -2,6 +2,7 @@
 
 不依赖模型、不联网，因此可以离线单测，也可以在评测脚本里复用。
 """
+
 from __future__ import annotations
 
 MAX_DAY_MINUTES = 600
@@ -28,7 +29,9 @@ def evaluate_report(report, expect: dict | None = None) -> list[str]:
         if total > MAX_DAY_MINUTES:
             problems.append(f"第 {day.day} 天游玩时长 {total} 分钟，超过 {MAX_DAY_MINUTES} 分钟上限")
         if 0 < index < len(report.plan) - 1 and total < MIN_DAY_MINUTES:
-            problems.append(f"第 {day.day} 天游玩时长只有 {total} 分钟，中间天空转（下限 {MIN_DAY_MINUTES} 分钟）")
+            problems.append(
+                f"第 {day.day} 天游玩时长只有 {total} 分钟，中间天空转（下限 {MIN_DAY_MINUTES} 分钟）"
+            )
         if not day.base_area.strip():
             problems.append(f"第 {day.day} 天没有填 base_area，无法判断通勤是否合理")
 
@@ -39,9 +42,7 @@ def evaluate_report(report, expect: dict | None = None) -> list[str]:
 
     day_sum = round(sum(d.day_cost_yuan for d in report.plan), 2)
     if day_sum > 0 and report.budget_total_yuan < day_sum * 0.8:
-        problems.append(
-            f"总预算 {report.budget_total_yuan} 明显低于各天花费合计 {day_sum}，数字自相矛盾"
-        )
+        problems.append(f"总预算 {report.budget_total_yuan} 明显低于各天花费合计 {day_sum}，数字自相矛盾")
 
     bad_refs = [r for r in report.references if not str(r).startswith("http")]
     if bad_refs:

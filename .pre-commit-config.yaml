@@ -1,0 +1,9 @@
+# 本地钩子：先装工具再注册（pre-commit install）
+# CI 里也会跑一遍 ruff check/format --diff，避免「我本机没装钩子」导致漏检。
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.4
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
