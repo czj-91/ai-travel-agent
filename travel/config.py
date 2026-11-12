@@ -42,6 +42,9 @@ class Settings:
     db_path: str
     search_timeout: float
     search_retries: int
+    # 单价给默认值：新增配置项不该让既有构造点全部崩掉
+    price_in_per_m: float = 0.0
+    price_out_per_m: float = 0.0
 
 
 def load_settings() -> Settings:
@@ -68,4 +71,7 @@ def load_settings() -> Settings:
         db_path=str(BASE_DIR / "resources" / "checkpoint.db"),
         search_timeout=float(os.getenv("SEARCH_TIMEOUT") or 15),
         search_retries=int(os.getenv("SEARCH_RETRIES") or 2),
+        # 单价按「每 100 万 token 的货币金额」配置，留空即不估算成本
+        price_in_per_m=float(os.getenv("PRICE_IN_PER_M") or 0),
+        price_out_per_m=float(os.getenv("PRICE_OUT_PER_M") or 0),
     )

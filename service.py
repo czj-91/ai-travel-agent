@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from travel import export as exporter
 from travel.config import MissingEnvError, load_settings
-from travel.graph import build_agent, plan_trip, stream_plan
+from travel.graph import build_agent, cost_yuan, plan_trip, stream_plan
 from travel.multimodal import ImageInputError, check_image_model, parse_data_image
 from travel.schemas import TripPlan
 from travel.security import RateLimiter, origins_from_env
@@ -131,6 +131,7 @@ class PlanResponse(BaseModel):
     elapsed_ms: int
     input_tokens: int
     output_tokens: int
+    cost_yuan: float | None = None
     plan: dict
 
 
@@ -239,6 +240,7 @@ def plan(payload: PlanRequest):
         elapsed_ms=stats.elapsed_ms,
         input_tokens=stats.input_tokens,
         output_tokens=stats.output_tokens,
+        cost_yuan=cost_yuan(stats, settings),
         plan=report.model_dump(),
     )
 

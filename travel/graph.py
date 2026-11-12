@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import time
 import uuid
 
 from langchain.agents import create_agent
@@ -21,7 +22,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from .config import Settings, load_settings
 from .multimodal import build_content, check_image_model
-from .observability import Timer, usage_from_messages
+from .observability import RunStats, Timer, usage_from_messages
 from .prompts import get_prompt
 from .rag import PoiIndex, build_poi_tool
 from .schemas import DayPlan, Spot, TripPlan
@@ -140,6 +141,15 @@ RESPONSE_TOOL_NAME = TripPlan.__name__
 WRITE_REPORT_EVERY = 320  # 每累计这么多字符推一次，避免两百多个分片把流刷屏
 
 
+def cost_yuan(stats: RunStats, settings) -> float | None:
+    """按配置的单价估算本次花费；没配单价就返回 None，绝不瞎猜价格。"""
+    price_in = float(getattr(settings, "price_in_per_m", 0) or 0)
+    price_out = float(getattr(settings, "price_out_per_m", 0) or 0)
+    if price_in <= 0 and price_out <= 0:
+        return None
+    return stats.cost_yuan(price_in, price_out)
+
+
 def _message_count(graph, config) -> int:
     """取当前 thread 已有的消息条数，用于把统计范围限制在本轮。"""
     try:
@@ -224,7 +234,7 @@ def plan_trip(
 def stream_plan(graph, settings, request: str, session_id: str | None = None, image_block=None):
     """流式规划：逐段产出事件字典，最后给出结构化结果与本轮统计。
 
-    事件类型：start / tool_call / tool_result / writing / plan / error。
+    事件类型：start / tool_call / tool_result(含 ms、hits、chars) / writing / plan(含 cost_yuan) / error。
 
     为什么是同步生成器而不是 async：本项目 checkpointer 是 `SqliteSaver`，
     它明确不支持 async（`astream` 会抛 NotImplementedError）。用同步 `graph.stream`
@@ -238,6 +248,7 @@ def stream_plan(graph, settings, request: str, session_id: str | None = None, im
     before = _message_count(graph, config)
 
     pending_names: dict[int, str] = {}
+    tool_clock: dict[str, list[float]] = {}
     written = last_report = 0
     written_text = ""
 
@@ -248,10 +259,19 @@ def stream_plan(graph, settings, request: str, session_id: str | None = None, im
                 meta.get("ls_agent_type") if isinstance(meta, dict) else None
             )
             if isinstance(chunk, _ToolMessage):
+                body = str(getattr(chunk, "content", ""))
+                started = tool_clock.get(name) or []
+                elapsed_ms = round((time.perf_counter() - started.pop(0)) * 1000) if started else None
                 yield {
                     "type": "tool_result",
                     "name": name,
-                    "preview": str(getattr(chunk, "content", ""))[:160],
+                    # 结构化工具不是真工具，是最终方案本身；标出来让前端能区分展示
+                    "kind": "response" if name == RESPONSE_TOOL_NAME else "tool",
+                    "ms": elapsed_ms,
+                    # 命中条数：POI 与搜索是「- 」开头的行，天气是「- 日期」行
+                    "hits": sum(1 for line in body.splitlines() if line.startswith("- ")),
+                    "chars": len(body),
+                    "preview": body[:160],
                 }
             elif isinstance(chunk, _AIMessageChunk):
                 for call in (
@@ -261,6 +281,7 @@ def stream_plan(graph, settings, request: str, session_id: str | None = None, im
                     call_name = call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
                     if call_name:
                         pending_names[idx] = call_name
+                        tool_clock.setdefault(call_name, []).append(time.perf_counter())
                         yield {"type": "tool_call", "name": call_name}
                     # 结构化工具的 args 是分片流式到达的：累计它就能推出「正在写第几天」，
                     # 比只有一条转圈进度条有用得多
@@ -312,4 +333,5 @@ def stream_plan(graph, settings, request: str, session_id: str | None = None, im
         "elapsed_ms": stats.elapsed_ms,
         "input_tokens": stats.input_tokens,
         "output_tokens": stats.output_tokens,
+        "cost_yuan": cost_yuan(stats, settings),
     }

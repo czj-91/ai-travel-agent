@@ -42,6 +42,8 @@ python evals/run_eval.py --dry-run
 python evals/run_eval.py --parallel 4 --judge --record   # 并发评测并写入看板
 python evals/retrieval.py                  # 检索质量：Recall@k / P@1 / nDCG@k
 python -m travel.memory --keep-recent 2    # 会话库清理（默认 dry-run，加 --apply 才删）
+# 想让结果区显示成本角标：在 .env 按当前模型定价填 PRICE_IN_PER_M / PRICE_OUT_PER_M（每 100 万 token 金额）
+# 不填就不显示——宁可不算，也不瞎猜价格
 python evals/ab_test.py --limit 3 --record # Prompt A/B 对比
 python evals/report.py                       # 渲染 reports/dashboard.md
 
@@ -118,7 +120,7 @@ legacy/            v1 单文件版本，仅作演进记录
 
 | 项目 | 结果 |
 | --- | --- |
-| 离线单测 | **42/42**（不联网；需联网子项在无密钥环境自动跳过，CI 可跑） |
+| 离线单测 | **45/45**（不联网；需联网子项在无密钥环境自动跳过，CI 可跑） |
 | 服务层测试 | **18/18**（TestClient，含 401/422/429/502/503、导出、网页、图片上传与 SSE） |
 | 会话库测试 | **4/4**（临时 sqlite，不碰真实数据库） |
 | 检索指标测试 | **3/3**（锁住 nDCG 上界、RRF 融合行为） |
@@ -139,6 +141,9 @@ legacy/            v1 单文件版本，仅作演进记录
 | 错误分类 | 401 提示填令牌并自动展开令牌框；402 说明是余额问题；422 归为输入问题；429 读 `Retry-After` 做按钮倒计时；502 说明已自动兜底过、可再试一次；网络失败提示确认服务在跑 |
 | 能力门控 | 从 `/health` 读模型名，非多模态时把图片投放区置灰并说明原因，而不是提交完才报错 |
 | 令牌字段 | 默认隐藏，`?admin=1` 或收到 401 时才出现 |
+| 执行轨迹 | 结果区列出每个工具的**耗时 / 命中条数 / 字符数**，实测样例：poi_lookup 753 ms（2 条）、weather_forecast 2,525 ms（4 条）、web_search 3,552 ms（3 条）、生成结构化方案 8,695 ms |
+| 成本角标 | 按 `PRICE_IN_PER_M` / `PRICE_OUT_PER_M` 估算本次花费（实测 ¥0.0297）；**没配单价就显示空，不瞎猜价格** |
+| 复制导出 | 「复制 Markdown」一键拿到导出全文（剪贴板 API 不可用时退回临时 textarea，兼容非安全上下文） |
 | 可访问性 | 进度文案 `aria-live="polite"`、统一 `:focus-visible` 焦点环、`prefers-reduced-motion` 已支持 |
 
 ### 成本演进（同样 6 条用例）
@@ -282,6 +287,8 @@ v2 一开始**通过率反而掉了 33%**：工具变多后模型偶尔只回文
 
 27. **`days_seen` 恒为 0**：第一版用「当前分片」里 `"day"` 的出现次数推算写到第几天，而分片只有几十字符，常常一个都不含 → 进度永远是 0。改成对**累计 args** 计数后才正确（实测 320→0 天、640→1 天、1280→2 天、1603→3 天）。
 28. **测试断言在单元素列表上自比**：`assert writings[0]["chars"] < writings[-1]["chars"]` 在只推了一次进度时变成 `98 < 98`，报「chars 应递增」——错误信息还把方向指错。改成先断言 `len(writings) >= 2` 再比首尾。**断言失败时先确认是不是断言本身不成立。**
+
+29. **结构化工具被当成普通工具混进执行轨迹**：`TripPlan` 也是通过工具调用产出的，所以它的 `tool_result` 会和真工具一起出现在轨迹里，用户会以为「TripPlan」是个外部服务。改成后端给结果事件打 `kind: "response" | "tool"` 标记，前端把方案生成单独列一行「生成结构化方案 8,695 ms」。**顺着「事件里有什么」往下想一步，才发现轨迹展示需要区分语义。**
 
 ## 8. 已知风险
 

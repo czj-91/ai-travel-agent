@@ -137,12 +137,20 @@ async function streamOrPost(body, onEvent, signal) {
   let result = null;
   const tools = [];
   const done = [];
+  const trace = [];
   let writing = null;
+  let finalMs = null;
   const emit = () => onEvent && onEvent({ tools, done, writing });
   try {
     await postStream("/plan/stream", body, (ev) => {
       if (ev.type === "tool_call") { tools.push(ev.name); emit(); }
-      else if (ev.type === "tool_result") { done.push(ev.name); emit(); }
+      else if (ev.type === "tool_result") {
+        done.push(ev.name);
+        // 保留耗时与命中条数：结果区能展示「谁慢、谁真的查到了东西」，而不只是一串工具名
+        if (ev.kind === "response") { finalMs = ev.ms; }
+        else trace.push({ name: ev.name, ms: ev.ms || null, hits: ev.hits || 0, chars: ev.chars || 0 });
+        emit();
+      }
       // writing 事件来自结构化工具的 args 分片累计：能报「写到第几天」，
       // 不再只有一条不知道在干什么的进度条
       else if (ev.type === "writing") { writing = ev; emit(); }
@@ -150,6 +158,7 @@ async function streamOrPost(body, onEvent, signal) {
         result = {
           plan: ev.plan, session_id: ev.session_id,
           input_tokens: ev.input_tokens, output_tokens: ev.output_tokens, elapsed_ms: ev.elapsed_ms,
+          cost_yuan: ev.cost_yuan ?? null, trace, final_ms: finalMs,
         };
       } else if (ev.type === "error") { throw new Error(ev.detail || "流式生成失败"); }
     }, signal);
@@ -233,11 +242,12 @@ async function generate() {
       const parts = [];
       if (prog.tools.length) parts.push("已调用 " + prog.tools.join(" → "));
       if (prog.done.length) parts.push("已取回 " + prog.done.length + " 份资料");
+      if (prog.trace && prog.trace.length) parts.push(prog.trace.map((s) => s.name + (s.ms != null ? " " + s.ms + "ms" : "")).join(" · "));
       if (prog.writing) parts.push("正在编排方案（已写 " + (prog.writing.chars / 1000).toFixed(1) + "k 字符，写到第 " + Math.max(1, prog.writing.days_seen) + " 天）");
       state.progressNote = parts.join(" · ") || "正在思考…";
     }, ctl.signal);
     state.session = data.session_id;
-    showPlan(data.plan, { session: data.session_id, tokens: data.input_tokens + data.output_tokens, ms: data.elapsed_ms });
+    showPlan(data.plan, { session: data.session_id, tokens: data.input_tokens + data.output_tokens, ms: data.elapsed_ms, cost: data.cost_yuan, trace: data.trace });
     $("follow").checked = true;
     pushHistory(data.plan, data.session_id, data.input_tokens + data.output_tokens);
     status("行程已生成。", "ok");
@@ -299,11 +309,25 @@ function showPlan(plan, meta) {
 
   const actions = add(box, "div", "actions");
   const md = add(actions, "button", "primary", "下载 Markdown");
+  const copy = add(actions, "button", "ghost", "复制 Markdown");
   const ics = add(actions, "button", "ghost", "下载 .ics 日历");
-  md.type = ics.type = "button";
+  md.type = copy.type = ics.type = "button";
   md.addEventListener("click", () => download(["markdown"]));
+  copy.addEventListener("click", () => copyMarkdown());
   ics.addEventListener("click", () => download(["ics"]));
-  if (meta.ms) add(box, "p", "note-soft", "本轮 " + meta.tokens + " token / " + (meta.ms / 1000).toFixed(1) + " 秒 · 会话 " + meta.session);
+  if (meta.ms) {
+    const cost = meta.cost == null ? "" : " · 约 ¥" + Number(meta.cost).toFixed(4);
+    add(box, "p", "note-soft", "本轮 " + meta.tokens + " token / " + (meta.ms / 1000).toFixed(1) + " 秒" + cost + " · 会话 " + meta.session);
+  }
+  if (meta.trace && meta.trace.length) {
+    const ul = add(box, "ul", "trace");
+    if (meta.final_ms != null) meta.trace.push({ name: "生成结构化方案", ms: meta.final_ms, hits: 0, chars: 0 });
+    meta.trace.forEach((step) => {
+      const li = add(ul, "li");
+      add(li, "b", null, step.name);
+      add(li, "span", null, (step.ms != null ? step.ms + " ms" : "—") + " · 命中 " + step.hits + " 条 · " + step.chars + " 字符");
+    });
+  }
 }
 
 function row(parent, className, when, title, why, fee) {
@@ -344,6 +368,33 @@ async function download(formats) {
     });
     status("已导出 " + data.files.map((f) => f.name).join("、") + (data.start_date_guessed ? "（起始日按 " + data.start_date + " 推测）" : ""), "ok");
   } catch (err) { status("导出失败：" + err.message, "error"); }
+}
+
+/* 复制导出内容：演示时不用再去文件夹里找文件，直接粘进文档或聊天 */
+async function copyMarkdown() {
+  if (!state.plan) return;
+  status("正在生成 Markdown…");
+  try {
+    const data = await post("/export", { plan: state.plan, start_date: $("start").value || null, formats: ["markdown"] });
+    const text = data.files[0].content;
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      // 非安全上下文（比如用局域网 IP 打开）没有 clipboard API，退回临时 textarea
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    status("Markdown 已复制到剪贴板（" + text.length + " 字符）。", "ok");
+  } catch (err) {
+    status("复制失败：" + err.message, "error");
+  }
 }
 
 /* ---------------- 历史会话 ---------------- */

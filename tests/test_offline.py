@@ -1177,6 +1177,108 @@ def test_stream_plan_emits_writing_progress():
     graph_module.WRITE_REPORT_EVERY = original_every
 
 
+def test_stream_plan_tool_result_carries_timing_and_hits():
+    """工具结果事件要带耗时与命中条数，前端才能画执行轨迹。"""
+    from types import SimpleNamespace
+
+    from langchain_core.messages import AIMessageChunk, ToolMessage
+
+    from travel.graph import stream_plan
+
+    class _State:
+        values: ClassVar = {"messages": []}
+
+    class _Fake:
+        def get_state(self, config):
+            return _State()
+
+        def stream(self, payload, config, stream_mode=None):
+            yield (
+                AIMessageChunk(content="", tool_call_chunks=[{"name": "poi_lookup", "args": "", "index": 0}]),
+                {},
+            )
+            yield (
+                ToolMessage(
+                    content="- 浙江省博物馆｜0元\n- 西泠印社｜75元\n  ⚠ 核实于 2025-11-03，可能过期",
+                    tool_call_id="c1",
+                    name="poi_lookup",
+                ),
+                {},
+            )
+
+        def invoke(self, payload, config):
+            return {"messages": [], "structured_response": None}
+
+    events = list(
+        stream_plan(_Fake(), SimpleNamespace(travel_model="deepseek-chat"), "杭州 1天", session_id="t-trace")
+    )
+    result = next(e for e in events if e["type"] == "tool_result")
+    assert isinstance(result["ms"], int) and result["ms"] >= 0
+    assert result["hits"] == 2, f"应按「- 」行数命中条数，实际 {result}"
+    assert result["chars"] > 0
+
+
+def test_cost_yuan_respects_price_config():
+    from types import SimpleNamespace
+
+    from travel.graph import cost_yuan
+    from travel.observability import RunStats
+
+    stats = RunStats(input_tokens=1_000_000, output_tokens=500_000)
+    # 没配单价就返回 None：宁可不算，也不瞎猜价格
+    assert cost_yuan(stats, SimpleNamespace(price_in_per_m=0, price_out_per_m=0)) is None
+    assert cost_yuan(stats, SimpleNamespace(price_in_per_m=2, price_out_per_m=8)) == 6.0
+
+
+def test_plan_event_includes_cost_yuan():
+    from types import SimpleNamespace
+
+    from langchain_core.messages import AIMessageChunk
+
+    from travel.graph import stream_plan
+
+    class _State:
+        values: ClassVar = {"messages": []}
+
+    class _Fake:
+        def get_state(self, config):
+            return _State()
+
+        def stream(self, payload, config, stream_mode=None):
+            yield AIMessageChunk(content="", tool_call_chunks=[{"name": "noop", "args": "", "index": 0}]), {}
+
+        def invoke(self, payload, config):
+            from travel.schemas import DayPlan, Spot, TripPlan
+
+            plan = TripPlan(
+                destination="杭州",
+                days=1,
+                traveler_profile="p",
+                plan=[
+                    DayPlan(
+                        day=1,
+                        theme="t",
+                        base_area="b",
+                        spots=[
+                            Spot(name="x", why="y", minutes=60, ticket_yuan=0),
+                            Spot(name="z", why="y", minutes=60, ticket_yuan=0),
+                        ],
+                        transport="walk",
+                        day_cost_yuan=0,
+                    )
+                ],
+                budget_total_yuan=0,
+                references=["https://example.com"],
+                summary="s",
+            )
+            return {"messages": [], "structured_response": plan}
+
+    settings = SimpleNamespace(travel_model="deepseek-chat", price_in_per_m=0, price_out_per_m=0)
+    events = list(stream_plan(_Fake(), settings, "杭州 1天", session_id="t-cost"))
+    plan_event = next(e for e in events if e["type"] == "plan")
+    assert "cost_yuan" in plan_event and plan_event["cost_yuan"] is None
+
+
 if __name__ == "__main__":
     tests = [(n, fn) for n, fn in sorted(globals().items()) if n.startswith("test_") and callable(fn)]
     failed = skipped = 0
