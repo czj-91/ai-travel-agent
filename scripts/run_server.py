@@ -7,6 +7,7 @@
 `uuid_utils.compat.uuid7` 替身，只在本地开发时插到 sys.path 最前面。
 该目录已 gitignore，不会进仓库；正解是容器化（Linux 镜像没有 SAC）。
 """
+
 from __future__ import annotations
 
 import os
