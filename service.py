@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from pathlib import Path
@@ -37,6 +38,8 @@ from travel.graph import build_agent, cost_yuan, plan_trip, provenance_from_mess
 from travel.multimodal import ImageInputError, check_image_model, parse_data_image
 from travel.schemas import TripPlan
 from travel.security import RateLimiter, origins_from_env
+
+_logger = logging.getLogger("ai_travel.service")
 
 app = FastAPI(title="AI Travel Agent", version="0.5.0")
 
@@ -281,9 +284,10 @@ def plan_stream(payload: PlanRequest):
                 yield _sse(event)
         except ValueError as exc:
             yield _sse({"type": "error", "detail": str(exc)})
-        except Exception:
-            # 不把内部异常原文透给调用方
-            yield _sse({"type": "error", "detail": "规划失败：服务端异常"})
+        except Exception as exc:
+            # 对外只给可读结论，但服务端必须留下完整堆栈，否则线上失败无从排查
+            _logger.exception("流式规划失败")
+            yield _sse({"type": "error", "detail": f"规划失败：{type(exc).__name__}"})
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(

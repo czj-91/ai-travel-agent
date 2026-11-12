@@ -1303,6 +1303,77 @@ def test_provenance_counts_only_real_tool_evidence():
     assert summary["calls"] == 3, f"TripPlan 不应算作外部依据：{summary}"
 
 
+def test_stream_plan_resets_writing_counter_per_attempt():
+    """结构化工具失败重试时，进度计数必须重新开始，不能跨两次尝试累加。"""
+    from types import SimpleNamespace
+
+    from langchain_core.messages import AIMessageChunk, ToolMessage
+
+    from travel.graph import RESPONSE_TOOL_NAME, stream_plan
+
+    class _State:
+        values: ClassVar = {"messages": []}
+
+    class _Fake:
+        def get_state(self, config):
+            return _State()
+
+        def stream(self, payload, config, stream_mode=None):
+            # 第一次尝试：写了 500 字符后被判无效
+            yield (
+                AIMessageChunk(
+                    content="", tool_call_chunks=[{"name": RESPONSE_TOOL_NAME, "args": "", "index": 0}]
+                ),
+                {},
+            )
+            yield AIMessageChunk(content="", tool_call_chunks=[{"args": "字" * 500, "index": 0}]), {}
+            yield (
+                ToolMessage(content="structured output invalid", tool_call_id="c1", name=RESPONSE_TOOL_NAME),
+                {},
+            )
+            # 第二次尝试：重新计数
+            yield (
+                AIMessageChunk(
+                    content="", tool_call_chunks=[{"name": RESPONSE_TOOL_NAME, "args": "", "index": 1}]
+                ),
+                {},
+            )
+            yield AIMessageChunk(content="", tool_call_chunks=[{"args": "字" * 400, "index": 1}]), {}
+
+        def invoke(self, payload, config):
+            from travel.schemas import DayPlan, Spot, TripPlan
+
+            plan = TripPlan(
+                destination="杭州",
+                days=1,
+                traveler_profile="p",
+                plan=[
+                    DayPlan(
+                        day=1,
+                        theme="t",
+                        base_area="b",
+                        spots=[
+                            Spot(name="x", why="y", minutes=60, ticket_yuan=0),
+                            Spot(name="z", why="y", minutes=60, ticket_yuan=0),
+                        ],
+                        transport="walk",
+                        day_cost_yuan=0,
+                    )
+                ],
+                budget_total_yuan=0,
+                references=["https://example.com"],
+                summary="s",
+            )
+            return {"messages": [], "structured_response": plan}
+
+    settings = SimpleNamespace(travel_model="deepseek-chat", price_in_per_m=0, price_out_per_m=0)
+    writings = [
+        e for e in stream_plan(_Fake(), settings, "杭州 1天", session_id="t-reset") if e["type"] == "writing"
+    ]
+    assert writings, "应至少推一次进度"
+    assert max(e["chars"] for e in writings) < 900, f"计数跨两次尝试累加了：{[e['chars'] for e in writings]}"
+
+
 if __name__ == "__main__":
     tests = [(n, fn) for n, fn in sorted(globals().items()) if n.startswith("test_") and callable(fn)]
     failed = skipped = 0

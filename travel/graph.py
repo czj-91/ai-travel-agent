@@ -312,6 +312,11 @@ def stream_plan(graph, settings, request: str, session_id: str | None = None, im
                     if call_name:
                         pending_names[idx] = call_name
                         tool_clock.setdefault(call_name, []).append(time.perf_counter())
+                        if call_name == RESPONSE_TOOL_NAME:
+                            # 结构化工具可能失败后重试（实测苏州请求出现两次 response），
+                            # 每次新尝试重新计数，否则 chars/days_seen 会跨两次尝试累加，报出虚高的进度
+                            written = last_report = 0
+                            written_text = ""
                         yield {"type": "tool_call", "name": call_name}
                     # 结构化工具的 args 是分片流式到达的：累计它就能推出「正在写第几天」，
                     # 比只有一条转圈进度条有用得多
