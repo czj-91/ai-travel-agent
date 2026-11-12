@@ -199,3 +199,21 @@ button:disabled { opacity: .55; cursor: progress; }
 @media (prefers-reduced-motion: reduce) {
   .bar i { animation: none; width: 100%; opacity: .5; }
 }
+
+/* 键盘可达性：没有焦点环的话 Tab 遍历完全看不见位置 */
+:focus-visible {
+  outline: 2px solid var(--accent, #1f6f5c);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* 模型不支持读图时，投放区要"看起来就不能点"，而不是点了才报错 */
+.drop[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+  border-style: dashed;
+}
+.drop[aria-disabled="true"]:hover {
+  background: transparent;
+  border-color: currentColor;
+}

@@ -40,7 +40,7 @@
           <label for="start">出发日期</label>
           <input type="date" id="start">
         </div>
-        <div class="field">
+        <div class="field" id="tokenField">
           <label for="token">服务令牌<span class="hint">（未启用鉴权就留空）</span></label>
           <input type="password" id="token" placeholder="可选" autocomplete="off">
         </div>
@@ -48,7 +48,7 @@
           <label for="image">参考图片（可选）</label>
           <label class="drop" id="drop">
             <input type="file" id="image" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
-            <span id="dropText">点这里选图，或把图片拖进来 · 单图 ≤8 MB · 需 TRAVEL_MODEL=qwen*</span>
+            <span id="dropText">点这里选图，或把图片拖进来 · 单图 ≤8 MB · 需多模态模型</span>
             <span class="thumb" id="thumbBox" hidden>
               <img id="thumb" alt="已选图片预览">
               <button id="clearImage" class="icon small" type="button" title="移除图片" aria-label="移除图片">×</button>
@@ -59,13 +59,14 @@
 
       <div class="actions">
         <button id="go" class="primary" type="button">生成行程</button>
+        <button id="cancel" class="ghost" type="button" hidden>取消生成</button>
         <button id="sample" class="ghost" type="button">载入示例行程</button>
         <label class="switch"><input type="checkbox" id="follow"> 在上一轮会话上继续改</label>
       </div>
 
       <div class="progress" id="progress" hidden>
         <div class="bar"><i></i></div>
-        <p id="progressText">正在检索知识库与天气…</p>
+        <p id="progressText" role="status" aria-live="polite">正在检索知识库与天气…</p>
       </div>
 
       <p class="status" id="status" role="status"></p>
@@ -81,7 +82,7 @@
   </main>
 
   <footer class="foot">
-    <span>接口：<code>POST /plan</code> · <code>POST /export</code> · <code>GET /health</code></span>
+    <span>接口：<code>POST /plan/stream</code>（SSE 流式） · <code>POST /plan</code> · <code>POST /export</code> · <code>GET /health</code></span>
     <span id="modelTag">—</span>
   </footer>
 </div>

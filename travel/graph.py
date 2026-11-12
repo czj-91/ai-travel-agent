@@ -134,6 +134,12 @@ def _first_json_object(text: str) -> str | None:
     return None
 
 
+# 结构化工具在 LangChain 里按 schema 类名注册（实测 238 个分片 / 348 字符 args 流式到达），
+# 据此可以推「正在写第几天」的进度事件。
+RESPONSE_TOOL_NAME = TripPlan.__name__
+WRITE_REPORT_EVERY = 320  # 每累计这么多字符推一次，避免两百多个分片把流刷屏
+
+
 def _message_count(graph, config) -> int:
     """取当前 thread 已有的消息条数，用于把统计范围限制在本轮。"""
     try:
@@ -218,7 +224,7 @@ def plan_trip(
 def stream_plan(graph, settings, request: str, session_id: str | None = None, image_block=None):
     """流式规划：逐段产出事件字典，最后给出结构化结果与本轮统计。
 
-    事件类型：start / tool_call / tool_result / plan / error。
+    事件类型：start / tool_call / tool_result / writing / plan / error。
 
     为什么是同步生成器而不是 async：本项目 checkpointer 是 `SqliteSaver`，
     它明确不支持 async（`astream` 会抛 NotImplementedError）。用同步 `graph.stream`
@@ -231,8 +237,12 @@ def stream_plan(graph, settings, request: str, session_id: str | None = None, im
     config = {"configurable": {"thread_id": thread}}
     before = _message_count(graph, config)
 
+    pending_names: dict[int, str] = {}
+    written = last_report = 0
+    written_text = ""
+
     with Timer() as timer:
-        yield {"type": "start", "session_id": thread}
+        yield {"type": "start", "session_id": thread, "model": settings.travel_model}
         for chunk, meta in graph.stream({"messages": [("user", content)]}, config, stream_mode="messages"):
             name = getattr(chunk, "name", None) or (
                 meta.get("ls_agent_type") if isinstance(meta, dict) else None
@@ -247,9 +257,25 @@ def stream_plan(graph, settings, request: str, session_id: str | None = None, im
                 for call in (
                     getattr(chunk, "tool_call_chunks", None) or getattr(chunk, "tool_calls", None) or []
                 ):
+                    idx = call.get("index", 0) if isinstance(call, dict) else 0
                     call_name = call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
                     if call_name:
+                        pending_names[idx] = call_name
                         yield {"type": "tool_call", "name": call_name}
+                    # 结构化工具的 args 是分片流式到达的：累计它就能推出「正在写第几天」，
+                    # 比只有一条转圈进度条有用得多
+                    args_bit = (call.get("args") or "") if isinstance(call, dict) else ""
+                    if args_bit and pending_names.get(idx) == RESPONSE_TOOL_NAME:
+                        written += len(args_bit)
+                        written_text += args_bit
+                        if written - last_report >= WRITE_REPORT_EVERY:
+                            last_report = written
+                            yield {
+                                "type": "writing",
+                                "target": "plan",
+                                "chars": written,
+                                "days_seen": written_text.count(chr(34) + "day" + chr(34)),
+                            }
                 text = getattr(chunk, "content", "")
                 if isinstance(text, list):
                     text = "".join(

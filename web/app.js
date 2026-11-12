@@ -6,7 +6,8 @@ const $ = (id) => document.getElementById(id);
 const DAY_START = 9 * 60, LUNCH_AT = 12 * 60, LUNCH_MIN = 60;
 const MAX_IMAGE = 8 * 1024 * 1024;
 const HISTORY_KEY = "ai-travel.history", THEME_KEY = "ai-travel.theme";
-const state = { plan: null, session: null, image: null, timer: 0, history: [] };
+const DEFAULT_DROP_TEXT = "点这里选图，或把图片拖进来 · 单图 ≤8 MB · 需多模态模型";
+const state = { plan: null, session: null, image: null, timer: 0, history: [], abort: null, progressNote: "", model: "", visualOk: null };
 
 /* ---------------- 小工具 ---------------- */
 function add(node, tag, className, text) {
@@ -77,32 +78,37 @@ async function post(path, body) {
 function busy(on, text) {
   $("go").disabled = on;
   $("progress").hidden = !on;
+  const cancel = $("cancel");
+  if (cancel) cancel.hidden = !on;
   if (on) {
     const started = Date.now();
     clearInterval(state.timer);
+    state.progressNote = text || "正在编排…";
+    $("progressText").textContent = state.progressNote + " · 已等待 0 秒";
     state.timer = setInterval(() => {
-      $("progressText").textContent = text + " 已等待 " + Math.round((Date.now() - started) / 1000) + " 秒（整轮通常 20–40 秒）";
+      $("progressText").textContent = state.progressNote + " · 已等待 " + Math.round((Date.now() - started) / 1000) + " 秒";
     }, 1000);
-    $("progressText").textContent = text + " 已等待 0 秒（整轮通常 20–40 秒）";
   } else {
     clearInterval(state.timer);
+    state.progressNote = "";
   }
 }
 
 /* ---------------- 流式请求 ---------------- */
-/* 同步 /plan 要让人盯 20–40 秒白屏，所以默认走 SSE；
+/* 同步 /plan 要让人盯 20-40 秒白屏，所以默认走 SSE；
    浏览器或代理不支持时自动退回一次性 /plan，功能不降级。 */
-async function postStream(path, body, onEvent) {
+async function postStream(path, body, onEvent, signal) {
   const headers = { "Content-Type": "application/json" };
   const token = $("token").value.trim();
   if (token) headers["X-Service-Token"] = token;
-  const resp = await fetch(path, { method: "POST", headers, body: JSON.stringify(body) });
+  const resp = await fetch(path, { method: "POST", headers, body: JSON.stringify(body), signal });
   if (!resp.ok) {
     const raw = await resp.text();
     let detail = raw;
     try { detail = JSON.parse(raw).detail || raw; } catch (_) { /* 网关非 JSON 时原样显示 */ }
     const err = new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
     err.code = resp.status;
+    err.retryAfter = Number(resp.headers.get("Retry-After") || 0);
     throw err;
   }
   const reader = resp.body.getReader();
@@ -127,20 +133,28 @@ async function postStream(path, body, onEvent) {
   }
 }
 
-async function streamOrPost(body, onDone) {
+async function streamOrPost(body, onEvent, signal) {
   let result = null;
   const tools = [];
+  const done = [];
+  let writing = null;
+  const emit = () => onEvent && onEvent({ tools, done, writing });
   try {
     await postStream("/plan/stream", body, (ev) => {
-      if (ev.type === "tool_call") { tools.push(ev.name); onDone && onDone(tools); }
+      if (ev.type === "tool_call") { tools.push(ev.name); emit(); }
+      else if (ev.type === "tool_result") { done.push(ev.name); emit(); }
+      // writing 事件来自结构化工具的 args 分片累计：能报「写到第几天」，
+      // 不再只有一条不知道在干什么的进度条
+      else if (ev.type === "writing") { writing = ev; emit(); }
       else if (ev.type === "plan") {
         result = {
           plan: ev.plan, session_id: ev.session_id,
           input_tokens: ev.input_tokens, output_tokens: ev.output_tokens, elapsed_ms: ev.elapsed_ms,
         };
       } else if (ev.type === "error") { throw new Error(ev.detail || "流式生成失败"); }
-    });
+    }, signal);
   } catch (err) {
+    if (err && err.name === "AbortError") throw err;
     if (err.code === 404 || err.code === 405) {
       // 老版本服务端没有 /plan/stream
       return await post("/plan", body);
@@ -151,18 +165,77 @@ async function streamOrPost(body, onDone) {
   return result;
 }
 
+/* 把状态码翻译成人能处理的下一步动作，而不是笼统一句「生成失败」 */
+function describeError(err) {
+  if (err && err.name === "AbortError") return { text: "已取消生成。", kind: "warn" };
+  if (err && err.code === 401) return { text: "这个服务启用了令牌鉴权，请在「服务令牌」里填入后重试。", kind: "error", needToken: true };
+  if (err && err.code === 402) return { text: "模型账户余额不足（402），与你的输入无关，充值后重试。", kind: "error" };
+  if (err && err.code === 422) return { text: "输入有问题：" + err.message, kind: "error" };
+  if (err && err.code === 429) return { text: "请求太频繁，稍后自动恢复（服务端限流）。", kind: "error", wait: err.retryAfter || 60 };
+  if (err && err.code === 502) return { text: "模型这次没按 schema 返回（502）。系统已自动兜底过一次，再点一次通常就好。", kind: "error" };
+  if (err && /Failed to fetch|NetworkError/i.test(String(err.message || err))) {
+    return { text: "连不上服务：确认 http://127.0.0.1:8080 仍在运行。", kind: "error" };
+  }
+  return { text: "生成失败：" + (err && err.message ? err.message : err), kind: "error" };
+}
+
+function startCooldown(seconds) {
+  const btn = $("go");
+  let left = Math.max(1, Math.round(seconds));
+  btn.disabled = true;
+  btn.textContent = "请等待 " + left + " 秒";
+  const tick = setInterval(() => {
+    left -= 1;
+    if (left <= 0) {
+      clearInterval(tick);
+      btn.disabled = false;
+      btn.textContent = "生成行程";
+    } else {
+      btn.textContent = "请等待 " + left + " 秒";
+    }
+  }, 1000);
+}
+
+function revealTokenField() {
+  const field = $("tokenField");
+  if (field) field.hidden = false;
+  $("token").focus();
+}
+
+function applyImageCapability() {
+  const drop = $("drop");
+  const hint = $("dropText");
+  if (!drop || !hint) return;
+  if (state.visualOk) {
+    drop.removeAttribute("aria-disabled");
+    hint.textContent = DEFAULT_DROP_TEXT;
+  } else {
+    drop.setAttribute("aria-disabled", "true");
+    hint.textContent = "当前模型 " + (state.model || "") + " 不支持读图；把 .env 里 TRAVEL_MODEL 设为 qwen3.5-plus 后这里才可用";
+  }
+}
+
 async function generate() {
   const request = $("request").value.trim();
   if (request.length < 2) { status("先写清目的地和天数，例如「杭州 3天 2人 喜欢人文 人均预算1500」。", "error"); return; }
+  if (state.image && state.visualOk === false) { status("当前模型不支持读图，请先去掉图片或换用 qwen 多模态模型。", "error"); return; }
   const body = { request };
   if ($("follow").checked && state.session) body.session_id = state.session;
   if (state.image) body.image = state.image;
-  busy(true, "正在查本地知识库与实时天气，并编排行程…");
+
+  const ctl = new AbortController();
+  state.abort = ctl;
+  let cooldown = 0;
+  busy(true, "正在查本地知识库与实时天气…");
   status("");
   try {
-    const data = await streamOrPost(body, (tools) => {
-      $("progressText").textContent = "已调用工具：" + tools.join(" → ") + "…（整轮通常 20–40 秒）";
-    });
+    const data = await streamOrPost(body, (prog) => {
+      const parts = [];
+      if (prog.tools.length) parts.push("已调用 " + prog.tools.join(" → "));
+      if (prog.done.length) parts.push("已取回 " + prog.done.length + " 份资料");
+      if (prog.writing) parts.push("正在编排方案（已写 " + (prog.writing.chars / 1000).toFixed(1) + "k 字符，写到第 " + Math.max(1, prog.writing.days_seen) + " 天）");
+      state.progressNote = parts.join(" · ") || "正在思考…";
+    }, ctl.signal);
     state.session = data.session_id;
     showPlan(data.plan, { session: data.session_id, tokens: data.input_tokens + data.output_tokens, ms: data.elapsed_ms });
     $("follow").checked = true;
@@ -171,10 +244,14 @@ async function generate() {
     // 只有真实生成才滚动到结果；示例/历史态保持原位，否则首屏标题会被顶出视口
     $("result").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (err) {
-    const hint = err.code === 402 || /402|balance/i.test(err.message) ? " 这通常是模型账户余额不足，与页面无关。" : "";
-    status("生成失败：" + err.message + hint, "error");
+    const info = describeError(err);
+    status(info.text, info.kind);
+    if (info.needToken) revealTokenField();
+    cooldown = info.wait || 0;
   } finally {
+    state.abort = null;
     busy(false);
+    if (cooldown) startCooldown(cooldown);
   }
 }
 
@@ -331,6 +408,8 @@ const drop = $("drop");
 
 /* ---------------- 绑定 ---------------- */
 $("go").addEventListener("click", generate);
+if ($("cancel")) $("cancel").addEventListener("click", () => { if (state.abort) state.abort.abort(); });
+if (!new URLSearchParams(location.search).has("admin") && $("tokenField")) $("tokenField").hidden = true;
 $("sample").addEventListener("click", () => {
   const plan = JSON.parse($("sample-plan").textContent);
   state.session = null;
@@ -349,8 +428,15 @@ $("start").min = ymd(new Date());
 state.history = read(HISTORY_KEY, []).filter((item) => item && item.plan);
 renderHistory();
 fetch("/health").then((r) => r.json()).then((data) => {
-  $("modelTag").textContent = data.status === "ok" ? "模型 " + data.model + " · 就绪" : "配置缺失：" + data.detail;
-  if (data.status !== "ok") status(data.detail, "error");
+  state.model = data.model || "";
+  if (data.status === "ok") {
+    $("modelTag").textContent = "模型 " + data.model + " · 就绪";
+    state.visualOk = /^qwen/i.test(data.model);
+    applyImageCapability();
+  } else {
+    $("modelTag").textContent = "配置缺失：" + data.detail;
+    status(data.detail, "error");
+  }
 }).catch(() => { $("modelTag").textContent = "服务未响应"; });
 
 // URL 参数必须最后处理：?demo=1 会立刻渲染行程，早于出发日期初始化就显示不出日历日

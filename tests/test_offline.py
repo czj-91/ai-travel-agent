@@ -1092,6 +1092,91 @@ def test_fact_check_no_false_positive_on_different_objects():
     assert any("150" in text and "120" in text for text in caught)
 
 
+def test_stream_plan_emits_writing_progress():
+    """writing 事件来自结构化工具 args 的分片累计，必须能报「写到第几天」。"""
+    from types import SimpleNamespace
+
+    from langchain_core.messages import AIMessageChunk
+
+    import travel.graph as graph_module
+    from travel.graph import RESPONSE_TOOL_NAME, stream_plan
+
+    # 真实方案有几千字符、阈值 320；测试用短分片，把阈值临时调小，
+    # 这样测的是「进度事件逻辑」而不是字符计数常量
+    original_every = graph_module.WRITE_REPORT_EVERY
+    graph_module.WRITE_REPORT_EVERY = 20
+
+    class _State:
+        values: ClassVar = {"messages": []}
+
+    class _FakeStreamGraph:
+        def get_state(self, config):
+            return _State()
+
+        def stream(self, payload, config, stream_mode=None):
+            yield (
+                AIMessageChunk(
+                    content="", tool_call_chunks=[{"name": RESPONSE_TOOL_NAME, "args": "", "index": 0}]
+                ),
+                {},
+            )
+            for frag in (
+                '{"destination":"杭州","plan":[{"day":1,',
+                '"theme":"湖","base_area":"b","spots":[],'
+                '"day":2,"theme":"山","base_area":"b"}],"summary":"s"}',
+            ):
+                yield AIMessageChunk(content="", tool_call_chunks=[{"args": frag, "index": 0}]), {}
+
+        def invoke(self, payload, config):
+            from travel.schemas import DayPlan, Spot, TripPlan
+
+            plan = TripPlan(
+                destination="杭州",
+                days=2,
+                traveler_profile="p",
+                plan=[
+                    DayPlan(
+                        day=1,
+                        theme="湖",
+                        base_area="b",
+                        spots=[
+                            Spot(name="x", why="y", minutes=60, ticket_yuan=0),
+                            Spot(name="z", why="y", minutes=60, ticket_yuan=0),
+                        ],
+                        transport="walk",
+                        day_cost_yuan=0,
+                    ),
+                    DayPlan(
+                        day=2,
+                        theme="山",
+                        base_area="b",
+                        spots=[
+                            Spot(name="x", why="y", minutes=60, ticket_yuan=0),
+                            Spot(name="z", why="y", minutes=60, ticket_yuan=0),
+                        ],
+                        transport="walk",
+                        day_cost_yuan=0,
+                    ),
+                ],
+                budget_total_yuan=0,
+                references=["https://example.com"],
+                summary="s",
+            )
+            return {"messages": [], "structured_response": plan}
+
+    settings = SimpleNamespace(travel_model="deepseek-chat")
+    events = list(stream_plan(_FakeStreamGraph(), settings, "杭州 2天", session_id="t-writing"))
+    kinds = [e["type"] for e in events]
+    assert "writing" in kinds, f"没有推 writing 事件：{kinds}"
+    writings = [e for e in events if e["type"] == "writing"]
+    assert len(writings) >= 2, f"进度事件太少：{writings}"
+    assert writings[-1]["chars"] > writings[0]["chars"], "chars 应递增"
+    assert any(e["days_seen"] >= 1 for e in writings), "应能报出写到第几天"
+    assert kinds[-1] == "plan"
+    assert events[0]["model"] == "deepseek-chat"
+    graph_module.WRITE_REPORT_EVERY = original_every
+
+
 if __name__ == "__main__":
     tests = [(n, fn) for n, fn in sorted(globals().items()) if n.startswith("test_") and callable(fn)]
     failed = skipped = 0
