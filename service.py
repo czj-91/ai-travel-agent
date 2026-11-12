@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from travel import export as exporter
 from travel.config import MissingEnvError, load_settings
-from travel.graph import build_agent, cost_yuan, plan_trip, stream_plan
+from travel.graph import build_agent, cost_yuan, plan_trip, provenance_from_messages, stream_plan
 from travel.multimodal import ImageInputError, check_image_model, parse_data_image
 from travel.schemas import TripPlan
 from travel.security import RateLimiter, origins_from_env
@@ -132,6 +132,7 @@ class PlanResponse(BaseModel):
     input_tokens: int
     output_tokens: int
     cost_yuan: float | None = None
+    provenance: dict | None = None
     plan: dict
 
 
@@ -225,9 +226,15 @@ def plan(payload: PlanRequest):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
-        report, stats, thread = plan_trip(
-            graph, settings, payload.request, payload.session_id, image_block=image_block
+        report, stats, thread, messages = plan_trip(
+            graph,
+            settings,
+            payload.request,
+            payload.session_id,
+            image_block=image_block,
+            return_messages=True,
         )
+        result_provenance = provenance_from_messages(messages)
     except Exception as exc:
         # 不把内部异常原文透给调用方，只给类型与截断信息，完整堆栈留在服务端日志
         raise HTTPException(status_code=500, detail=f"规划失败：{type(exc).__name__}") from exc
@@ -241,6 +248,7 @@ def plan(payload: PlanRequest):
         input_tokens=stats.input_tokens,
         output_tokens=stats.output_tokens,
         cost_yuan=cost_yuan(stats, settings),
+        provenance=result_provenance,
         plan=report.model_dump(),
     )
 

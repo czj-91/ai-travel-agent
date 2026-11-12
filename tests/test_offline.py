@@ -1279,6 +1279,30 @@ def test_plan_event_includes_cost_yuan():
     assert "cost_yuan" in plan_event and plan_event["cost_yuan"] is None
 
 
+def test_provenance_counts_only_real_tool_evidence():
+    """依据来源面板必须只报服务端事实：工具消息里的条目数，不含模型自述。"""
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    from travel.graph import provenance_from_messages
+
+    messages = [
+        AIMessage(content="我先查一下"),
+        ToolMessage(content="- 兵马俑｜120元\n- 城墙｜54元", tool_call_id="1", name="poi_lookup"),
+        ToolMessage(
+            content="- 11-13 小雨\n- 11-14 晴\n  ⚠ 可能过期", tool_call_id="2", name="weather_forecast"
+        ),
+        ToolMessage(content="- 攻略A | https://a\n- 攻略B | https://b", tool_call_id="3", name="web_search"),
+        # 结构化工具的返回值不是外部依据，不能被计入
+        ToolMessage(content="Returning structured response: TripPlan ...", tool_call_id="4", name="TripPlan"),
+    ]
+    summary = provenance_from_messages(messages)
+    assert summary["local_kb"] == 2
+    assert summary["weather_days"] == 2
+    assert summary["web"] == 2
+    assert summary["stale"] == 1
+    assert summary["calls"] == 3, f"TripPlan 不应算作外部依据：{summary}"
+
+
 if __name__ == "__main__":
     tests = [(n, fn) for n, fn in sorted(globals().items()) if n.startswith("test_") and callable(fn)]
     failed = skipped = 0

@@ -158,7 +158,7 @@ async function streamOrPost(body, onEvent, signal) {
         result = {
           plan: ev.plan, session_id: ev.session_id,
           input_tokens: ev.input_tokens, output_tokens: ev.output_tokens, elapsed_ms: ev.elapsed_ms,
-          cost_yuan: ev.cost_yuan ?? null, trace, final_ms: finalMs,
+          cost_yuan: ev.cost_yuan ?? null, provenance: ev.provenance ?? null, trace, final_ms: finalMs,
         };
       } else if (ev.type === "error") { throw new Error(ev.detail || "流式生成失败"); }
     }, signal);
@@ -247,7 +247,7 @@ async function generate() {
       state.progressNote = parts.join(" · ") || "正在思考…";
     }, ctl.signal);
     state.session = data.session_id;
-    showPlan(data.plan, { session: data.session_id, tokens: data.input_tokens + data.output_tokens, ms: data.elapsed_ms, cost: data.cost_yuan, trace: data.trace });
+    showPlan(data.plan, { session: data.session_id, tokens: data.input_tokens + data.output_tokens, ms: data.elapsed_ms, cost: data.cost_yuan, provenance: data.provenance, trace: data.trace });
     $("follow").checked = true;
     pushHistory(data.plan, data.session_id, data.input_tokens + data.output_tokens);
     status("行程已生成。", "ok");
@@ -315,9 +315,32 @@ function showPlan(plan, meta) {
   md.addEventListener("click", () => download(["markdown"]));
   copy.addEventListener("click", () => copyMarkdown());
   ics.addEventListener("click", () => download(["ics"]));
+  // 结构化 JSON 抽屉：证明输出真的可被程序消费，而不是"看起来像 JSON"
+  const details = add(box, "details", "drawer");
+  add(details, "summary", null, "查看结构化 JSON（供程序消费）");
+  const pre = add(details, "pre", null, JSON.stringify(plan, null, 2));
+  const copyJson = add(details, "button", "ghost", "复制 JSON");
+  copyJson.type = "button";
+  copyJson.addEventListener("click", () => writeClipboard(pre.textContent, "JSON 已复制"));
   if (meta.ms) {
     const cost = meta.cost == null ? "" : " · 约 ¥" + Number(meta.cost).toFixed(4);
     add(box, "p", "note-soft", "本轮 " + meta.tokens + " token / " + (meta.ms / 1000).toFixed(1) + " 秒" + cost + " · 会话 " + meta.session);
+  }
+  const host = document.querySelector("main");
+  if (host) host.classList.add("three");
+  if (meta.provenance) {
+    const prov = meta.provenance;
+    const box2 = add(box, "div", "prov");
+    add(box2, "h3", null, "数据新鲜度与依据");
+    const items = [
+      ["本地权威库", prov.local_kb + " 条"],
+      ["实时天气", prov.weather_days + " 天"],
+      ["联网搜索", prov.web + " 条"],
+    ];
+    if (prov.stale) items.push(["已过 TTL", prov.stale + " 次工具结果被标注可能过期"]);
+    if (!prov.local_kb && !prov.web) items.push(["外部依据", "无：本方案未取到工具证据，视为模型自行发挥"]);
+    const ul2 = add(box2, "ul");
+    items.forEach((pair) => { const li = add(ul2, "li"); add(li, "b", null, pair[0]); add(li, "span", null, pair[1]); });
   }
   if (meta.trace && meta.trace.length) {
     const ul = add(box, "ul", "trace");
@@ -368,6 +391,40 @@ async function download(formats) {
     });
     status("已导出 " + data.files.map((f) => f.name).join("、") + (data.start_date_guessed ? "（起始日按 " + data.start_date + " 推测）" : ""), "ok");
   } catch (err) { status("导出失败：" + err.message, "error"); }
+}
+
+async function writeClipboard(text, okMessage) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      // 非安全上下文（比如用局域网 IP 打开）没有 clipboard API，退回临时 textarea
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    status(okMessage + "（" + text.length + " 字符）。", "ok");
+  } catch (err) {
+    status("复制失败：" + err.message, "error");
+  }
+}
+
+/* 复制导出内容：演示时不用再去文件夹里找文件，直接粘进文档或聊天 */
+async function copyMarkdown() {
+  if (!state.plan) return;
+  status("正在生成 Markdown…");
+  try {
+    const data = await post("/export", { plan: state.plan, start_date: $("start").value || null, formats: ["markdown"] });
+    await writeClipboard(data.files[0].content, "Markdown 已复制到剪贴板");
+  } catch (err) {
+    status("复制失败：" + err.message, "error");
+  }
 }
 
 /* 复制导出内容：演示时不用再去文件夹里找文件，直接粘进文档或聊天 */
@@ -459,6 +516,7 @@ const drop = $("drop");
 
 /* ---------------- 绑定 ---------------- */
 $("go").addEventListener("click", generate);
+if ($("emptySample")) $("emptySample").addEventListener("click", () => $("sample").click());
 if ($("cancel")) $("cancel").addEventListener("click", () => { if (state.abort) state.abort.abort(); });
 if (!new URLSearchParams(location.search).has("admin") && $("tokenField")) $("tokenField").hidden = true;
 $("sample").addEventListener("click", () => {

@@ -141,6 +141,32 @@ RESPONSE_TOOL_NAME = TripPlan.__name__
 WRITE_REPORT_EVERY = 320  # 每累计这么多字符推一次，避免两百多个分片把流刷屏
 
 
+def provenance_from_messages(messages) -> dict:
+    """从**实际发生的工具结果**归纳依据来源，而不是让模型自述它用了什么。
+
+    模型自述会漏、会编；工具消息是服务端事实。面板因此只报这些数。
+    """
+    summary = {"local_kb": 0, "web": 0, "weather_days": 0, "stale": 0, "calls": 0}
+    for message in messages or []:
+        if not isinstance(message, _ToolMessage):
+            continue
+        name = getattr(message, "name", "") or ""
+        body = str(getattr(message, "content", ""))
+        hits = sum(1 for line in body.splitlines() if line.startswith("- "))
+        if hits == 0:
+            continue
+        summary["calls"] += 1
+        if name == "poi_lookup":
+            summary["local_kb"] += hits
+        elif name == "web_search":
+            summary["web"] += hits
+        elif name == "weather_forecast":
+            summary["weather_days"] += hits
+        if "可能过期" in body:
+            summary["stale"] += 1
+    return summary
+
+
 def cost_yuan(stats: RunStats, settings) -> float | None:
     """按配置的单价估算本次花费；没配单价就返回 None，绝不瞎猜价格。"""
     price_in = float(getattr(settings, "price_in_per_m", 0) or 0)
@@ -194,8 +220,9 @@ def plan_trip(
     session_id: str | None = None,
     image_path: str | None = None,
     image_block: dict | None = None,
+    return_messages: bool = False,
 ):
-    """跑一次规划，返回 (TripPlan, RunStats, thread_id)。同一 session_id 会延续记忆。
+    """跑一次规划，返回 (TripPlan, RunStats, thread_id)；return_messages=True 时额外返回本轮消息。
 
     带图片时必须用多模态模型（qwen-vl / qwen3.5-plus 这类），否则直接拒绝，
     不要让请求打到模型后再报一个看不懂的 400。
@@ -228,6 +255,9 @@ def plan_trip(
     # 只统计本轮新增的消息：整个 thread 历史都算会把多轮会话的成本虚报成单次成本
     stats = usage_from_messages({"messages": (result.get("messages") or [])[before:]})
     stats.elapsed_ms = timer.elapsed_ms
+    messages = result.get("messages") or []
+    if return_messages:
+        return report, stats, thread, messages
     return report, stats, thread
 
 
@@ -334,4 +364,5 @@ def stream_plan(graph, settings, request: str, session_id: str | None = None, im
         "input_tokens": stats.input_tokens,
         "output_tokens": stats.output_tokens,
         "cost_yuan": cost_yuan(stats, settings),
+        "provenance": provenance_from_messages(messages),
     }
